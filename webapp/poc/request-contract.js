@@ -368,12 +368,27 @@
 
 iframe.addEventListener("load", function () {
   /*
-   * El listener de mensajes responde al handshake normal de UI5.
-   * Este envío adicional cubre el caso en que F2403 solicitó el
-   * desbloqueo antes de que el wrapper registrara el listener.
+   * Fallback defensivo. Normalmente UI5 queda autorizado mediante
+   * SAPFrameProtection*require-origin antes de este evento.
    */
   unlockFioriFrameProtection();
   applyPrefill();
 });
+
+/*
+ * Iniciamos F2403 solo después de registrar tanto el puente de
+ * frame protection como el listener de carga. Esto evita perder
+ * la primera solicitud de autorización de UI5.
+ */
+const fioriSrc = iframe.dataset.src;
+
+if (!fioriSrc) {
+  setStatus(
+    "Error inicializando F2403: no se configuró data-src."
+  );
+  return;
+}
+
+iframe.src = fioriSrc;
 
 })();
