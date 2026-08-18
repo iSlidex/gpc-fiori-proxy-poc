@@ -17,8 +17,10 @@
    * vigente de S/4; no usar IDs históricos ni UUIDs de contexto.
    */
   const contextByDivision = Object.freeze({
-    "60": "20107"
-    // Pendiente: agregar los otros tres mappings confirmados.
+    "10": "20098",
+    "11": "20096",
+    "60": "20107",
+    "70": "20099"
   });
 
   const cxContext = contextByDivision[cxDivision];
