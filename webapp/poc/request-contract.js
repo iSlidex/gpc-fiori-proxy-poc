@@ -29,7 +29,6 @@
   const status = document.getElementById("status");
 
   let prefillApplied = false;
-  let prefillInProgress = false;
 
   function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
@@ -131,12 +130,8 @@
 
       const initialized =
         obj &&
-        obj.LegalTransactionTitle === cxTitle &&
-        obj.LglCntntMContext === cxContext &&
         obj.LglCntntMContextUUID &&
-        controller._contextGUID &&
-        Array.isArray(controller._aStepsIndices) &&
-        controller._aStepsIndices.length > 0;
+        controller._contextGUID;
 
       if (initialized) {
         return;
@@ -150,205 +145,10 @@
     );
   }
 
-  function getCurrentF2403State() {
-    try {
-      const win = iframe.contentWindow;
-
-      if (!win || !win.sap || !win.sap.ui) {
-        return null;
-      }
-
-      const core = win.sap.ui.getCore();
-      const view = core.byId(
-        "application-LegalTransaction-create-component---create"
-      );
-
-      if (!view) {
-        return null;
-      }
-
-      const controller = view.getController();
-      const model = controller && controller.getModel();
-      const ctx = view.getBindingContext();
-
-      if (!controller || !model || !ctx) {
-        return null;
-      }
-
-      return {
-        win,
-        view,
-        controller,
-        model,
-        ctx
-      };
-    } catch (error) {
-      return null;
-    }
-  }
-
-  function hasExpectedPrefill(state) {
-    if (!state) {
-      return false;
-    }
-
-    const obj =
-      state.model.getObject(state.ctx.getPath());
-
-    return Boolean(
-      obj &&
-      obj.LegalTransactionTitle === cxTitle &&
-      obj.LglCntntMContext === cxContext &&
-      obj.LglCntntMContextUUID &&
-      state.controller._contextGUID &&
-      Array.isArray(
-        state.controller._aStepsIndices
-      ) &&
-      state.controller._aStepsIndices.length > 0
-    );
-  }
-
-  async function waitForPrefillStability() {
-    /*
-     * F2403 puede recrear el binding context después de que la
-     * vista y el UUID ya existen. Exigimos varias lecturas
-     * consecutivas sobre el estado más reciente antes de dar
-     * el prefill por terminado.
-     */
-    let stableSamples = 0;
-    let expectedStateWasSeen = false;
-
-    for (let attempt = 0; attempt < 80; attempt++) {
-      const state = getCurrentF2403State();
-
-      if (hasExpectedPrefill(state)) {
-        expectedStateWasSeen = true;
-        stableSamples++;
-
-        if (stableSamples >= 12) {
-          return state;
-        }
-      } else {
-        if (expectedStateWasSeen) {
-          return null;
-        }
-
-        stableSamples = 0;
-      }
-
-      await sleep(250);
-    }
-
-    return null;
-  }
-
-  async function applyPrefillOnce() {
-    const {
-      win,
-      view,
-      controller,
-      model,
-      ctx
-    } = await waitForF2403();
-
-    /*
-     * IMPORTANTE: título primero. basicDataValidation() consulta
-     * el título antes de ejecutar GET_STEP_SEQUENCE.
-     */
-    model.setProperty(
-      "LegalTransactionTitle",
-      cxTitle,
-      ctx
-    );
-
-    /*
-     * Contexto después.
-     */
-    model.setProperty(
-      "LglCntntMContext",
-      cxContext,
-      ctx
-    );
-
-    /*
-     * Sincronizamos los bindings visuales antes de lanzar
-     * changeModelValue.
-     */
-    win.sap.ui.getCore().applyChanges();
-
-    const contextField =
-      view.byId("idLglCntntMContext");
-
-    if (!contextField) {
-      throw new Error(
-        "No se encontró idLglCntntMContext."
-      );
-    }
-
-    /*
-     * Este es el mismo evento que la vista estándar F2403
-     * conecta con basicDataValidation().
-     */
-    if (
-      typeof contextField.fireChangeModelValue === "function"
-    ) {
-      contextField.fireChangeModelValue();
-    } else {
-      contextField.fireEvent(
-        "changeModelValue"
-      );
-    }
-
-    await waitForContextInitialization(
-      controller,
-      model,
-      ctx
-    );
-  }
-
-  function logSuccessfulPrefill(state, attempt) {
-    const result =
-      state.model.getObject(state.ctx.getPath());
-
-    console.log(
-      "[CX F2403 POC] Prefill aplicado",
-      {
-        attempt,
-        cxTitle,
-        cxOpportunityId,
-        cxDivision,
-        cxContext,
-
-        LegalTransactionTitle:
-          result.LegalTransactionTitle,
-
-        LglCntntMContext:
-          result.LglCntntMContext,
-
-        LglCntntMContextUUID:
-          result.LglCntntMContextUUID,
-
-        LglCntntMContextTitle:
-          result.LglCntntMContextTitle,
-
-        LglCntntMProfile:
-          result.LglCntntMProfile,
-
-        contextGUID:
-          state.controller._contextGUID,
-
-        steps:
-          state.controller._aStepsIndices
-      }
-    );
-  }
-
   async function applyPrefill() {
-    if (prefillApplied || prefillInProgress) {
+    if (prefillApplied) {
       return;
     }
-
-    prefillInProgress = true;
 
     try {
       setStatus("Inicializando solicitud de contrato...");
@@ -379,50 +179,118 @@
         );
       }
 
-      let lastError;
+      const {
+        win,
+        view,
+        controller,
+        model,
+        ctx
+      } = await waitForF2403();
 
-      for (let attempt = 1; attempt <= 3; attempt++) {
-        try {
-          await applyPrefillOnce();
-
-          const stableState =
-            await waitForPrefillStability();
-
-          if (!stableState) {
-            throw new Error(
-              "F2403 reinicializó el modelo después del prefill."
-            );
-          }
-
-          logSuccessfulPrefill(
-            stableState,
-            attempt
-          );
-
-          prefillApplied = true;
-          hideStatus();
-          return;
-        } catch (error) {
-          lastError = error;
-
-          console.warn(
-            "[CX F2403 POC] Reintentando prefill",
-            {
-              attempt,
-              error: error.message
-            }
-          );
-
-          if (attempt < 3) {
-            setStatus(
-              "F2403 continúa inicializándose. Reintentando..."
-            );
-            await sleep(500);
-          }
-        }
+      /*
+       * IMPORTANTE:
+       *
+       * Título primero.
+       *
+       * basicDataValidation() consulta el título antes de ejecutar
+       * GET_STEP_SEQUENCE.
+       */
+      if (cxTitle) {
+        model.setProperty(
+          "LegalTransactionTitle",
+          cxTitle,
+          ctx
+        );
       }
 
-      throw lastError;
+      /*
+       * Contexto después.
+       */
+      if (cxContext) {
+        model.setProperty(
+          "LglCntntMContext",
+          cxContext,
+          ctx
+        );
+
+        /*
+         * Sincronizamos los bindings visuales antes de lanzar
+         * changeModelValue.
+         */
+        win.sap.ui.getCore().applyChanges();
+
+        const contextField =
+          view.byId("idLglCntntMContext");
+
+        if (!contextField) {
+          throw new Error(
+            "No se encontró idLglCntntMContext."
+          );
+        }
+
+        /*
+         * Este es el mismo evento que la vista estándar F2403
+         * conecta con basicDataValidation().
+         */
+        if (
+          typeof contextField.fireChangeModelValue === "function"
+        ) {
+          contextField.fireChangeModelValue();
+        } else {
+          /*
+           * Fallback por si cambia la forma en la que UI5 genera
+           * el método fire<Event>.
+           */
+          contextField.fireEvent(
+            "changeModelValue"
+          );
+        }
+
+        await waitForContextInitialization(
+          controller,
+          model,
+          ctx
+        );
+      }
+
+      const result =
+        model.getObject(ctx.getPath());
+
+      console.log(
+        "[CX F2403 POC] Prefill aplicado",
+        {
+          cxTitle,
+          cxOpportunityId,
+          cxDivision,
+          cxContext,
+
+          LegalTransactionTitle:
+            result.LegalTransactionTitle,
+
+          LglCntntMContext:
+            result.LglCntntMContext,
+
+          LglCntntMContextUUID:
+            result.LglCntntMContextUUID,
+
+          LglCntntMContextTitle:
+            result.LglCntntMContextTitle,
+
+          LglCntntMProfile:
+            result.LglCntntMProfile,
+
+          contextGUID:
+            controller._contextGUID,
+
+          steps:
+            controller._aStepsIndices
+        }
+      );
+
+      prefillApplied = true;
+
+      hideStatus();
+
     } catch (error) {
       console.error(
         "[CX F2403 POC] Error",
@@ -433,13 +301,11 @@
         "Error inicializando F2403: " +
         error.message
       );
-    } finally {
-      prefillInProgress = false;
     }
   }
 
-  iframe.addEventListener("load", function () {
-    applyPrefill();
-  });
+iframe.addEventListener("load", function () {
+  applyPrefill();
+});
 
 })();
