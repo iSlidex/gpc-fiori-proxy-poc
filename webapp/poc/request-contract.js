@@ -3,8 +3,25 @@
 
   const params = new URLSearchParams(window.location.search);
 
-  const cxTitle = params.get("cxTitle");
-  const cxContext = params.get("cxContext");
+  const cxTitle = (params.get("cxTitle") || "").trim();
+  const cxOpportunityId = (
+    params.get("cxOpportunityId") || ""
+  ).trim();
+  const cxDivision = (
+    params.get("cxDivision") || ""
+  ).trim();
+
+  /*
+   * La división proviene de la Opportunity en CX.
+   * Solo se agregan mappings confirmados contra la configuración
+   * vigente de S/4; no usar IDs históricos ni UUIDs de contexto.
+   */
+  const contextByDivision = Object.freeze({
+    "60": "20107"
+    // Pendiente: agregar los otros tres mappings confirmados.
+  });
+
+  const cxContext = contextByDivision[cxDivision];
 
   const iframe = document.getElementById("fiori");
   const status = document.getElementById("status");
@@ -134,6 +151,32 @@
     try {
       setStatus("Inicializando solicitud de contrato...");
 
+      if (!cxTitle) {
+        throw new Error(
+          "CX no envió el título de la Opportunity (cxTitle)."
+        );
+      }
+
+      if (!cxDivision) {
+        throw new Error(
+          "CX no envió la división de la Opportunity (cxDivision)."
+        );
+      }
+
+      if (!cxContext) {
+        throw new Error(
+          "La división CX " +
+          cxDivision +
+          " todavía no tiene un contexto S/4 configurado."
+        );
+      }
+
+      if (!cxOpportunityId) {
+        console.warn(
+          "[CX F2403 POC] CX no envió cxOpportunityId."
+        );
+      }
+
       const {
         win,
         view,
@@ -215,6 +258,8 @@
         "[CX F2403 POC] Prefill aplicado",
         {
           cxTitle,
+          cxOpportunityId,
+          cxDivision,
           cxContext,
 
           LegalTransactionTitle:
