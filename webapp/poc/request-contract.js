@@ -30,6 +30,68 @@
 
   let prefillApplied = false;
 
+  /*
+   * F2403 usa SAPUI5 frameOptions="trusted". Cuando la cadena es
+   * CX -> wrapper -> F2403, la aplicación interna solicita al
+   * wrapper que confirme que el frame padre está autorizado.
+   *
+   * Esta POC solo responde cuando el wrapper fue abierto desde el
+   * tenant CX explícitamente permitido.
+   */
+  const trustedParentOrigins = new Set([
+    "https://my1002084.us1.test.crm.cloud.sap"
+  ]);
+
+  function getParentOrigin() {
+    try {
+      return new URL(document.referrer).origin;
+    } catch (error) {
+      return "";
+    }
+  }
+
+  function isTrustedParentOrigin() {
+    return trustedParentOrigins.has(
+      getParentOrigin()
+    );
+  }
+
+  function unlockFioriFrameProtection() {
+    if (!isTrustedParentOrigin()) {
+      console.warn(
+        "[CX F2403 POC] Origen padre no autorizado",
+        getParentOrigin()
+      );
+      return;
+    }
+
+    if (!iframe.contentWindow) {
+      return;
+    }
+
+    iframe.contentWindow.postMessage(
+      "SAPFrameProtection*parent-unlocked",
+      window.location.origin
+    );
+  }
+
+  window.addEventListener(
+    "message",
+    function (event) {
+      const isFioriRequest =
+        event.source === iframe.contentWindow &&
+        event.origin === window.location.origin &&
+        event.data ===
+          "SAPFrameProtection*require-origin";
+
+      if (!isFioriRequest) {
+        return;
+      }
+
+      unlockFioriFrameProtection();
+    }
+  );
+
   function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
@@ -305,6 +367,12 @@
   }
 
 iframe.addEventListener("load", function () {
+  /*
+   * El listener de mensajes responde al handshake normal de UI5.
+   * Este envío adicional cubre el caso en que F2403 solicitó el
+   * desbloqueo antes de que el wrapper registrara el listener.
+   */
+  unlockFioriFrameProtection();
   applyPrefill();
 });
 
