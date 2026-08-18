@@ -1,0 +1,6 @@
+node_modules/
+mta_archives/
+*.mtar
+.git/
+.vscode/
+.DS_Store

@@ -1,0 +1,19 @@
+{
+  "welcomeFile": "/sap/bc/ui2/flp?saml2=disabled&sap-client=110&sap-language=ES",
+  "authenticationMethod": "none",
+  "routes": [
+    {
+      "source": "^/poc/(.*)$",
+      "target": "$1",
+      "localDir": "webapp/poc",
+      "authenticationType": "none"
+    },
+    {
+      "source": "^/sap/(.*)$",
+      "target": "/sap/$1",
+      "destination": "S4CXMashup",
+      "authenticationType": "none",
+      "csrfProtection": false
+    }
+  ]
+}

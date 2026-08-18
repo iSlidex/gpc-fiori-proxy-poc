@@ -1,0 +1,5 @@
+{
+  "xsappname": "gpc-fiori-proxy-poc",
+  "tenant-mode": "dedicated",
+  "description": "POC Fiori S4 proxy with principal propagation"
+}

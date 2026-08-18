@@ -1,0 +1,17 @@
+{
+  "name": "gpc-fiori-proxy-poc",
+  "version": "1.0.0",
+  "private": true,
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "start": "node node_modules/@sap/approuter/approuter.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@sap/approuter": "^23.0.0"
+  }
+}

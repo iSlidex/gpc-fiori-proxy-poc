@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1.0"
+  />
+
+  <title>Solicitud de contrato legal</title>
+
+  <style>
+    html,
+    body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+    }
+
+    #status {
+      position: absolute;
+      z-index: 1000;
+      top: 16px;
+      left: 50%;
+      transform: translateX(-50%);
+
+      padding: 10px 16px;
+
+      background: white;
+
+      border: 1px solid #ddd;
+      border-radius: 6px;
+
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+
+      font-family: Arial, sans-serif;
+      font-size: 14px;
+    }
+
+    #fiori {
+      width: 100%;
+      height: 100%;
+      border: 0;
+    }
+  </style>
+</head>
+
+<body>
+
+  <div id="status">
+    Cargando solicitud de contrato...
+  </div>
+
+  <iframe
+    id="fiori"
+    src="/sap/bc/ui2/flp?saml2=disabled&amp;sap-client=110&amp;sap-language=ES&amp;sap-ushell-config=headerless#LegalTransaction-create"
+  ></iframe>
+
+  <script src="request-contract.js"></script>
+
+</body>
+</html>

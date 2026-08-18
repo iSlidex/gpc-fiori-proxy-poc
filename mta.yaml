@@ -1,0 +1,38 @@
+_schema-version: "3.3"
+
+ID: gpc-fiori-proxy-poc
+version: 0.0.2
+description: POC AppRouter for S4 Fiori through Cloud Connector
+
+modules:
+  - name: gpc-fiori-proxy-approuter
+    type: approuter.nodejs
+    path: .
+    parameters:
+      memory: 256M
+      disk-quota: 256M
+      keep-existing-routes: true
+    requires:
+      - name: gpc-fiori-proxy-xsuaa
+      - name: gpc-fiori-proxy-destination
+      - name: gpc-fiori-proxy-connectivity
+
+resources:
+  - name: gpc-fiori-proxy-xsuaa
+    type: org.cloudfoundry.managed-service
+    parameters:
+      service: xsuaa
+      service-plan: application
+      path: ./xs-security.json
+
+  - name: gpc-fiori-proxy-destination
+    type: org.cloudfoundry.managed-service
+    parameters:
+      service: destination
+      service-plan: lite
+
+  - name: gpc-fiori-proxy-connectivity
+    type: org.cloudfoundry.managed-service
+    parameters:
+      service: connectivity
+      service-plan: lite
