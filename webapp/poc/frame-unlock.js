@@ -74,9 +74,17 @@
   }
 
   function startPersistentUnlock(reason) {
-    stopPersistentUnlock();
-    unlockAttempts = 0;
+    /*
+     * Si ya existe un ciclo activo no lo reiniciamos. Enviamos un
+     * parent-unlocked inmediato y conservamos los reintentos que ya
+     * estaban programados.
+     */
+    if (unlockTimer) {
+      unlock(reason);
+      return;
+    }
 
+    unlockAttempts = 0;
     unlock(reason);
 
     unlockTimer = window.setInterval(function () {
@@ -108,6 +116,16 @@
     if (requestFromParent) {
       startPersistentUnlock('parent-request');
     }
+  });
+
+  /*
+   * request-contract.js emite este evento cuando la vista Create,
+   * controller, modelo y binding context de F2403 ya existen. Este es
+   * el momento de mayor probabilidad de que frameOptions procese el
+   * mensaje inmediatamente.
+   */
+  window.addEventListener('gpc:f2403-ready', function () {
+    startPersistentUnlock('f2403-ready');
   });
 
   iframe.addEventListener('load', function () {
