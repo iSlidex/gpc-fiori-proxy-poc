@@ -24,73 +24,10 @@
   });
 
   const cxContext = contextByDivision[cxDivision];
-
   const iframe = document.getElementById("fiori");
   const status = document.getElementById("status");
 
   let prefillApplied = false;
-
-  /*
-   * F2403 usa SAPUI5 frameOptions="trusted". Cuando la cadena es
-   * CX -> wrapper -> F2403, la aplicación interna solicita al
-   * wrapper que confirme que el frame padre está autorizado.
-   *
-   * Esta POC solo responde cuando el wrapper fue abierto desde el
-   * tenant CX explícitamente permitido.
-   */
-  const trustedParentOrigins = new Set([
-    "https://my1002084.us1.test.crm.cloud.sap"
-  ]);
-
-  function getParentOrigin() {
-    try {
-      return new URL(document.referrer).origin;
-    } catch (error) {
-      return "";
-    }
-  }
-
-  function isTrustedParentOrigin() {
-    return trustedParentOrigins.has(
-      getParentOrigin()
-    );
-  }
-
-  function unlockFioriFrameProtection() {
-    if (!isTrustedParentOrigin()) {
-      console.warn(
-        "[CX F2403 POC] Origen padre no autorizado",
-        getParentOrigin()
-      );
-      return;
-    }
-
-    if (!iframe.contentWindow) {
-      return;
-    }
-
-    iframe.contentWindow.postMessage(
-      "SAPFrameProtection*parent-unlocked",
-      window.location.origin
-    );
-  }
-
-  window.addEventListener(
-    "message",
-    function (event) {
-      const isFioriRequest =
-        event.source === iframe.contentWindow &&
-        event.origin === window.location.origin &&
-        event.data ===
-          "SAPFrameProtection*require-origin";
-
-      if (!isFioriRequest) {
-        return;
-      }
-
-      unlockFioriFrameProtection();
-    }
-  );
 
   function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
@@ -109,17 +46,22 @@
     }
   }
 
+  function notifyF2403Ready() {
+    window.dispatchEvent(
+      new CustomEvent("gpc:f2403-ready", {
+        detail: { timestamp: Date.now() }
+      })
+    );
+  }
+
   async function waitForF2403() {
     /*
      * FLP puede terminar de cargar antes que la aplicación F2403.
-     * Por eso esperamos hasta encontrar:
-     *
-     * - SAPUI5
-     * - la vista Create
-     * - el controller
-     * - el binding context
+     * Esperamos hasta encontrar SAPUI5, la vista Create, su controller,
+     * modelo y binding context. En ese instante notificamos al bridge
+     * de frame protection para que envíe parent-unlocked justo cuando
+     * F2403 ya está preparado para procesarlo.
      */
-
     for (let attempt = 0; attempt < 120; attempt++) {
       try {
         const win = iframe.contentWindow;
@@ -130,7 +72,6 @@
         }
 
         const core = win.sap.ui.getCore();
-
         const view = core.byId(
           "application-LegalTransaction-create-component---create"
         );
@@ -141,7 +82,6 @@
         }
 
         const controller = view.getController();
-
         if (!controller) {
           await sleep(250);
           continue;
@@ -154,6 +94,8 @@
           await sleep(250);
           continue;
         }
+
+        notifyF2403Ready();
 
         return {
           win,
@@ -250,73 +192,47 @@
       } = await waitForF2403();
 
       /*
-       * IMPORTANTE:
-       *
-       * Título primero.
-       *
-       * basicDataValidation() consulta el título antes de ejecutar
-       * GET_STEP_SEQUENCE.
+       * Título primero: basicDataValidation() consulta el título antes
+       * de ejecutar GET_STEP_SEQUENCE.
        */
-      if (cxTitle) {
-        model.setProperty(
-          "LegalTransactionTitle",
-          cxTitle,
-          ctx
+      model.setProperty(
+        "LegalTransactionTitle",
+        cxTitle,
+        ctx
+      );
+
+      /* Contexto después. */
+      model.setProperty(
+        "LglCntntMContext",
+        cxContext,
+        ctx
+      );
+
+      win.sap.ui.getCore().applyChanges();
+
+      const contextField = view.byId("idLglCntntMContext");
+
+      if (!contextField) {
+        throw new Error(
+          "No se encontró idLglCntntMContext."
         );
       }
 
-      /*
-       * Contexto después.
-       */
-      if (cxContext) {
-        model.setProperty(
-          "LglCntntMContext",
-          cxContext,
-          ctx
-        );
-
-        /*
-         * Sincronizamos los bindings visuales antes de lanzar
-         * changeModelValue.
-         */
-        win.sap.ui.getCore().applyChanges();
-
-        const contextField =
-          view.byId("idLglCntntMContext");
-
-        if (!contextField) {
-          throw new Error(
-            "No se encontró idLglCntntMContext."
-          );
-        }
-
-        /*
-         * Este es el mismo evento que la vista estándar F2403
-         * conecta con basicDataValidation().
-         */
-        if (
-          typeof contextField.fireChangeModelValue === "function"
-        ) {
-          contextField.fireChangeModelValue();
-        } else {
-          /*
-           * Fallback por si cambia la forma en la que UI5 genera
-           * el método fire<Event>.
-           */
-          contextField.fireEvent(
-            "changeModelValue"
-          );
-        }
-
-        await waitForContextInitialization(
-          controller,
-          model,
-          ctx
-        );
+      if (
+        typeof contextField.fireChangeModelValue === "function"
+      ) {
+        contextField.fireChangeModelValue();
+      } else {
+        contextField.fireEvent("changeModelValue");
       }
 
-      const result =
-        model.getObject(ctx.getPath());
+      await waitForContextInitialization(
+        controller,
+        model,
+        ctx
+      );
+
+      const result = model.getObject(ctx.getPath());
 
       console.log(
         "[CX F2403 POC] Prefill aplicado",
@@ -325,34 +241,25 @@
           cxOpportunityId,
           cxDivision,
           cxContext,
-
           LegalTransactionTitle:
             result.LegalTransactionTitle,
-
           LglCntntMContext:
             result.LglCntntMContext,
-
           LglCntntMContextUUID:
             result.LglCntntMContextUUID,
-
           LglCntntMContextTitle:
             result.LglCntntMContextTitle,
-
           LglCntntMProfile:
             result.LglCntntMProfile,
-
           contextGUID:
             controller._contextGUID,
-
           steps:
             controller._aStepsIndices
         }
       );
 
       prefillApplied = true;
-
       hideStatus();
-
     } catch (error) {
       console.error(
         "[CX F2403 POC] Error",
@@ -366,29 +273,22 @@
     }
   }
 
-iframe.addEventListener("load", function () {
+  iframe.addEventListener("load", function () {
+    applyPrefill();
+  });
+
   /*
-   * Fallback defensivo. Normalmente UI5 queda autorizado mediante
-   * SAPFrameProtection*require-origin antes de este evento.
+   * Iniciamos F2403 después de registrar el listener de carga.
+   * frame-unlock.js ya está cargado previamente desde el HTML.
    */
-  unlockFioriFrameProtection();
-  applyPrefill();
-});
+  const fioriSrc = iframe.dataset.src;
 
-/*
- * Iniciamos F2403 solo después de registrar tanto el puente de
- * frame protection como el listener de carga. Esto evita perder
- * la primera solicitud de autorización de UI5.
- */
-const fioriSrc = iframe.dataset.src;
+  if (!fioriSrc) {
+    setStatus(
+      "Error inicializando F2403: no se configuró data-src."
+    );
+    return;
+  }
 
-if (!fioriSrc) {
-  setStatus(
-    "Error inicializando F2403: no se configuró data-src."
-  );
-  return;
-}
-
-iframe.src = fioriSrc;
-
+  iframe.src = fioriSrc;
 })();
