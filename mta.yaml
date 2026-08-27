@@ -12,6 +12,13 @@ modules:
       memory: 256M
       disk-quota: 1G
       keep-existing-routes: true
+    properties:
+      # @sap/approuter envía X-Frame-Options: SAMEORIGIN por defecto.
+      # El proxy debe poder abrirse dentro del mashup/monitor y la protección
+      # de F2403 se mantiene mediante su handshake SAPFrameProtection.
+      SEND_XFRAMEOPTIONS: "false"
+      httpHeaders: >-
+        [{"Content-Security-Policy":"frame-ancestors 'self' https://my1002084.us1.test.crm.cloud.sap https://gpc-creacion-solicitud-contrato.cfapps.us10-001.hana.ondemand.com https://*.applicationstudio.cloud.sap"}]
     requires:
       - name: gpc-fiori-proxy-xsuaa
       - name: gpc-fiori-proxy-destination
