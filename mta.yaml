@@ -10,7 +10,7 @@ modules:
     path: .
     parameters:
       memory: 256M
-      disk-quota: 256M
+      disk-quota: 1G
       keep-existing-routes: true
     requires:
       - name: gpc-fiori-proxy-xsuaa
