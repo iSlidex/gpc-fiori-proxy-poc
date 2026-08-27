@@ -9,7 +9,9 @@
     'https://gpc-creacion-solicitud-contrato.cfapps.us10-001.hana.ondemand.com'
   ]);
 
-  function parentOrigin() {
+  let trustedParentOrigin = '';
+
+  function getReferrerOrigin() {
     try {
       return new URL(document.referrer).origin;
     } catch (_error) {
@@ -26,20 +28,37 @@
     }
   }
 
-  function isTrustedParent() {
-    const origin = parentOrigin();
+  function isTrustedOrigin(origin) {
     return trustedOrigins.has(origin) || isBasPreviewOrigin(origin);
   }
 
-  function unlock() {
-    if (!iframe.contentWindow || !isTrustedParent()) {
-      return;
+  function rememberTrustedParent(origin) {
+    if (isTrustedOrigin(origin)) {
+      trustedParentOrigin = origin;
+      return true;
     }
+    return false;
+  }
+
+  rememberTrustedParent(getReferrerOrigin());
+
+  function canUnlock() {
+    return Boolean(trustedParentOrigin && iframe.contentWindow);
+  }
+
+  function unlock() {
+    if (!canUnlock()) return;
 
     iframe.contentWindow.postMessage(
       'SAPFrameProtection*parent-unlocked',
       window.location.origin
     );
+  }
+
+  function scheduleUnlocks() {
+    [0, 200, 500, 1000, 2000, 4000, 7000].forEach(function (delay) {
+      window.setTimeout(unlock, delay);
+    });
   }
 
   window.addEventListener('message', function (event) {
@@ -48,8 +67,20 @@
       event.origin === window.location.origin &&
       event.data === 'SAPFrameProtection*require-origin';
 
-    if (requestFromFiori) unlock();
+    if (requestFromFiori) {
+      unlock();
+      return;
+    }
+
+    const requestFromParent =
+      event.source === window.parent &&
+      event.data === 'GPC_ECM_UNLOCK_F2403' &&
+      rememberTrustedParent(event.origin);
+
+    if (requestFromParent) {
+      scheduleUnlocks();
+    }
   });
 
-  iframe.addEventListener('load', unlock);
+  iframe.addEventListener('load', scheduleUnlocks);
 })();
