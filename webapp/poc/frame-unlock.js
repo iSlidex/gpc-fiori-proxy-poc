@@ -50,10 +50,22 @@
   }
 
   function isTrustedOrigin(origin) {
-    return (
-      trustedOrigins.has(origin) ||
-      isBasPreviewOrigin(origin) ||
-      isGpcWrapperOrigin(origin)
+    /*
+     * CSP frame-ancestors ya decide qué sitios pueden cargar este proxy.
+     * Una vez cargado, document.referrer identifica al padre efectivo.
+     * Validamos además event.source === window.parent al procesar mensajes,
+     * evitando mantener una segunda allowlist que se desincronice con CSP.
+     */
+    const referrerOrigin = getReferrerOrigin();
+
+    return Boolean(
+      origin &&
+      (
+        origin === referrerOrigin ||
+        trustedOrigins.has(origin) ||
+        isBasPreviewOrigin(origin) ||
+        isGpcWrapperOrigin(origin)
+      )
     );
   }
 
