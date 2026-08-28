@@ -207,13 +207,39 @@
     );
   }
 
-  function applyExtendedHeaderPrefill(model, ctx) {
+  function applyExtendedHeaderPrefill(view, model, ctx) {
+    /*
+     * F2403 expone dos pares para el monto. Las propiedades
+     * ZZ1_MONTO_LTH / ZZ1_MonedaMonto_LTH son las que están enlazadas
+     * a los controles visibles; el par MontoAprobacin conserva los
+     * valores técnicos que viajan en la entidad transitoria.
+     */
     if (cxAmount) {
       model.setProperty("ZZ1_MontoAprobacin_LTH", cxAmount, ctx);
+      model.setProperty("ZZ1_MONTO_LTH", cxAmount, ctx);
+      fireBoundValueChange(view, "ZZ1_MONTO_LTH", cxAmount);
     }
 
     if (cxCurrency) {
       model.setProperty("ZZ1_MontoAprobacin_LTHC", cxCurrency, ctx);
+      model.setProperty("ZZ1_MonedaMonto_LTH", cxCurrency, ctx);
+      fireBoundValueChange(view, "ZZ1_MonedaMonto_LTH", cxCurrency);
+    }
+
+    if (cxAmount || cxCurrency) {
+      console.info(
+        "[CX F2403 POC] Monto y moneda precargados",
+        {
+          ZZ1_MontoAprobacin_LTH:
+            model.getProperty("ZZ1_MontoAprobacin_LTH", ctx),
+          ZZ1_MontoAprobacin_LTHC:
+            model.getProperty("ZZ1_MontoAprobacin_LTHC", ctx),
+          ZZ1_MONTO_LTH:
+            model.getProperty("ZZ1_MONTO_LTH", ctx),
+          ZZ1_MonedaMonto_LTH:
+            model.getProperty("ZZ1_MonedaMonto_LTH", ctx)
+        }
+      );
     }
 
     if (cxPep !== null) {
@@ -443,10 +469,15 @@
     }
   }
 
-  function fireBoundValueChange(row, property, value) {
-    if (!row || typeof row.findAggregatedObjects !== "function") return;
+  function fireBoundValueChange(container, property, value) {
+    if (
+      !container ||
+      typeof container.findAggregatedObjects !== "function"
+    ) {
+      return;
+    }
 
-    const controls = row.findAggregatedObjects(true, (control) => {
+    const controls = container.findAggregatedObjects(true, (control) => {
       if (!control || typeof control.getBindingInfo !== "function") {
         return false;
       }
@@ -567,7 +598,7 @@
        * Estos campos se aplican después de inicializar el contexto porque
        * F2403 puede recalcular el modelo al ejecutar GET_STEP_SEQUENCE.
        */
-      applyExtendedHeaderPrefill(model, ctx);
+      applyExtendedHeaderPrefill(view, model, ctx);
       schedulePartyPrefill(view, model);
       win.sap.ui.getCore().applyChanges();
 
@@ -604,6 +635,12 @@
             result.ZZ1_MontoAprobacin_LTH,
           ZZ1_MontoAprobacin_LTHC:
             result.ZZ1_MontoAprobacin_LTHC,
+          ZZ1_MONTO_LTH:
+            result.ZZ1_MONTO_LTH,
+          ZZ1_MonedaMonto_LTH:
+            result.ZZ1_MonedaMonto_LTH,
+          ZZ1_MonedaMonto_LTHT:
+            result.ZZ1_MonedaMonto_LTHT,
           ZZ1_PersonaespecialPEP_LTH:
             result.ZZ1_PersonaespecialPEP_LTH,
           contextGUID:
