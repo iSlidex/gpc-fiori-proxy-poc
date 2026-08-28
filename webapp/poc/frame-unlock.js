@@ -33,8 +33,28 @@
     }
   }
 
+  function isGpcWrapperOrigin(origin) {
+    try {
+      const url = new URL(origin);
+      if (url.protocol !== 'https:') return false;
+
+      return (
+        url.hostname ===
+          'gpc-creacion-solicitud-contrato.cfapps.us10-001.hana.ondemand.com' ||
+        /^corporacion-aeroportuaria-del-este-sas-gpc-dev-buildcod[a-z0-9-]*\.cfapps\.us10-001\.hana\.ondemand\.com$/i
+          .test(url.hostname)
+      );
+    } catch (_error) {
+      return false;
+    }
+  }
+
   function isTrustedOrigin(origin) {
-    return trustedOrigins.has(origin) || isBasPreviewOrigin(origin);
+    return (
+      trustedOrigins.has(origin) ||
+      isBasPreviewOrigin(origin) ||
+      isGpcWrapperOrigin(origin)
+    );
   }
 
   function rememberTrustedParent(origin) {
