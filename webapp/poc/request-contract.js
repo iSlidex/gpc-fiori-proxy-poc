@@ -19,14 +19,16 @@
 
   /*
    * La división proviene de la Opportunity en CX.
-   * Publicidad (70) se mantiene en 20099 por defecto. Licitaciones se
-   * selecciona solamente cuando CX envía explícitamente cxContext=20012.
+   * El value help vivo de F2403 confirmó para división 70:
+   * - 20125: Intercambio publicitario (flujo estándar)
+   * - 20099: Licitaciones GDL (override explícito desde CX)
+   * El ID histórico 20012 no se usa porque F2403 no logra inicializarlo.
    */
   const contextByDivision = Object.freeze({
     "10": "20098",
     "11": "20096",
     "60": "20107",
-    "70": "20099"
+    "70": "20125"
   });
 
   const cxContext = resolveContext(cxDivision, requestedContext);
@@ -59,13 +61,25 @@
   }
 
   function resolveContext(division, override) {
-    if (division === "70" && override === "20012") {
-      return "20012";
+    if (division === "70") {
+      if (!override) {
+        return contextByDivision[division];
+      }
+
+      if (override === "20099") {
+        return "20099";
+      }
+
+      console.error(
+        "[CX F2403 POC] Contexto de Publicidad no permitido. Para Licitaciones GDL use cxContext=20099; sin override se usa Intercambio publicitario 20125.",
+        { division, override }
+      );
+      return "";
     }
 
     if (override) {
       console.warn(
-        "[CX F2403 POC] cxContext ignorado. Solo se permite el override división 70 -> Licitaciones 20012.",
+        "[CX F2403 POC] cxContext ignorado. Los overrides explícitos solo están habilitados actualmente para división 70.",
         { division, override }
       );
     }
@@ -490,7 +504,7 @@
         throw new Error(
           "La división CX " +
           cxDivision +
-          " todavía no tiene un contexto S/4 configurado."
+          " no tiene un contexto S/4 válido para los parámetros recibidos."
         );
       }
 
