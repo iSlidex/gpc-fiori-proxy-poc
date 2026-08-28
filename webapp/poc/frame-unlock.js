@@ -44,7 +44,26 @@
     return false;
   }
 
+  function notifyParent(type, detail) {
+    if (!trustedParentOrigin || window.parent === window) return;
+
+    window.parent.postMessage(
+      {
+        source: 'gpc-fiori-proxy-poc',
+        type,
+        detail: detail || {}
+      },
+      trustedParentOrigin
+    );
+  }
+
   rememberTrustedParent(getReferrerOrigin());
+
+  if (trustedParentOrigin) {
+    notifyParent('GPC_ECM_PROXY_READY', {
+      proxyOrigin: window.location.origin
+    });
+  }
 
   function canUnlock() {
     return Boolean(trustedParentOrigin && iframe.contentWindow);
@@ -114,6 +133,9 @@
       rememberTrustedParent(event.origin);
 
     if (requestFromParent) {
+      notifyParent('GPC_ECM_PROXY_READY', {
+        proxyOrigin: window.location.origin
+      });
       startPersistentUnlock('parent-request');
     }
   });
@@ -125,6 +147,9 @@
    * mensaje inmediatamente.
    */
   window.addEventListener('gpc:f2403-ready', function () {
+    notifyParent('GPC_ECM_F2403_READY', {
+      proxyOrigin: window.location.origin
+    });
     startPersistentUnlock('f2403-ready');
   });
 
