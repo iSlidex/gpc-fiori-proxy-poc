@@ -7,6 +7,10 @@
   const cxOpportunityId = clean(params.get("cxOpportunityId"));
   const cxDivision = clean(params.get("cxDivision"));
   const requestedContext = clean(params.get("cxContext"));
+  const cxSalesCycle = clean(params.get("cxSalesCycle"));
+  const cxSalesCycleDescription = clean(
+    params.get("cxSalesCycleDescription")
+  );
   const cxAmount = clean(params.get("cxAmount"));
   const cxCurrency = clean(params.get("cxCurrency"));
   const cxAmountSource = clean(params.get("cxAmountSource"));
@@ -31,7 +35,12 @@
     "70": "20125"
   });
 
-  const cxContext = resolveContext(cxDivision, requestedContext);
+  const cxContext = resolveContext(
+    cxDivision,
+    requestedContext,
+    cxSalesCycle,
+    cxSalesCycleDescription
+  );
   const iframe = document.getElementById("fiori");
   const status = document.getElementById("status");
 
@@ -60,19 +69,32 @@
     return null;
   }
 
-  function resolveContext(division, override) {
+  function resolveContext(
+    division,
+    override,
+    salesCycle,
+    salesCycleDescription
+  ) {
     if (division === "70") {
+      if (isTenderSalesCycle(salesCycle, salesCycleDescription)) {
+        return "20099";
+      }
+
       if (!override) {
         return contextByDivision[division];
       }
 
       if (override === "20099") {
+        console.warn(
+          "[CX F2403 POC] Se usó cxContext=20099 como compatibilidad. En la integración productiva Licitaciones se determina por el ciclo de ventas.",
+          { division, override, salesCycle, salesCycleDescription }
+        );
         return "20099";
       }
 
       console.error(
-        "[CX F2403 POC] Contexto de Publicidad no permitido. Para Licitaciones GDL use cxContext=20099; sin override se usa Intercambio publicitario 20125.",
-        { division, override }
+        "[CX F2403 POC] Contexto de Publicidad no permitido. Licitaciones GDL se determina por el ciclo de ventas; las demás oportunidades usan Intercambio publicitario 20125.",
+        { division, override, salesCycle, salesCycleDescription }
       );
       return "";
     }
@@ -85,6 +107,13 @@
     }
 
     return contextByDivision[division];
+  }
+
+  function isTenderSalesCycle(salesCycle, salesCycleDescription) {
+    const description = normalize(
+      salesCycleDescription || salesCycle
+    );
+    return description.includes("licitacion");
   }
 
   function sleep(ms) {
@@ -611,6 +640,9 @@
           cxOpportunityId,
           cxDivision,
           requestedContext: requestedContext || null,
+          cxSalesCycle: cxSalesCycle || null,
+          cxSalesCycleDescription:
+            cxSalesCycleDescription || null,
           cxContext,
           cxAmount: cxAmount || null,
           cxAmountSource: cxAmountSource || null,
