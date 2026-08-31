@@ -12,6 +12,15 @@ modules:
       memory: 256M
       disk-quota: 1G
       keep-existing-routes: true
+    properties:
+      # Evita que @sap/approuter añada SAMEORIGIN. index.js aplica una política
+      # frame-ancestors explícita tanto a /poc como a las respuestas /sap.
+      SEND_XFRAMEOPTIONS: "false"
+      CX_FRAME_ANCESTOR: "https://my1002084.us1.test.crm.cloud.sap"
+      GPC_FRAME_ANCESTOR: "https://gpc-creacion-solicitud-contrato.cfapps.us10-001.hana.ondemand.com"
+      BAS_FRAME_ANCESTOR: "https://*.applicationstudio.cloud.sap"
+      # EXTRA_FRAME_ANCESTORS puede definirse como lista separada por comas
+      # mediante cf set-env cuando sea necesario habilitar otro origen aprobado.
     requires:
       - name: gpc-fiori-proxy-xsuaa
       - name: gpc-fiori-proxy-destination

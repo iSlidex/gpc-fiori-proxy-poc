@@ -5,7 +5,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "start": "node node_modules/@sap/approuter/approuter.js"
+    "start": "node index.js"
   },
   "keywords": [],
   "author": "",
