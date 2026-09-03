@@ -15,10 +15,6 @@
   const cxCurrency = clean(params.get("cxCurrency"));
   const cxAmountSource = clean(params.get("cxAmountSource"));
   const cxProduct = clean(params.get("cxProduct"));
-  const cxClientBp = clean(params.get("cxClientBp"));
-  const cxClientType = clean(params.get("cxClientType"));
-  const cxPrimaryContactBp = clean(params.get("cxPrimaryContactBp"));
-  const cxSignerBp = clean(params.get("cxSignerBp"));
   const cxPep = parseOptionalBoolean(params.get("cxPep"));
 
   /*
@@ -45,8 +41,18 @@
   const status = document.getElementById("status");
 
   let prefillApplied = false;
-  const populatedEntityPaths = new Set();
-  const populatedExternalContactPaths = new Set();
+  let approvalModelListenerAttached = false;
+  const approvalSyncControls = new WeakSet();
+  const approvalFieldPairs = Object.freeze([
+    {
+      visible: "ZZ1_MONTO_LTH",
+      approved: "ZZ1_MontoAprobacin_LTH"
+    },
+    {
+      visible: "ZZ1_MonedaMonto_LTH",
+      approved: "ZZ1_MontoAprobacin_LTHC"
+    }
+  ]);
 
   function clean(value) {
     return value === null || value === undefined
@@ -342,160 +348,104 @@
     return "";
   }
 
-  function schedulePartyPrefill(view, model) {
-    const entitiesSmartTable = view.byId("entitiesSmartTable");
-    const externalSmartTable = view.byId("extContactsSmartTable");
-
-    const applyEntities = () => applyEntityPrefill(entitiesSmartTable, model);
-    const applyExternal = () => applyExternalContactPrefill(externalSmartTable, model);
-
+  function boundValueControls(container, property) {
     if (
-      entitiesSmartTable &&
-      typeof entitiesSmartTable.attachDataReceived === "function"
+      !container ||
+      typeof container.findAggregatedObjects !== "function"
     ) {
-      entitiesSmartTable.attachDataReceived(applyEntities);
+      return [];
     }
 
+    return container.findAggregatedObjects(true, (control) => {
+      if (!control || typeof control.getBindingInfo !== "function") {
+        return false;
+      }
+
+      const bindingInfo = control.getBindingInfo("value");
+      if (!bindingInfo) return false;
+
+      const paths = [];
+      if (bindingInfo.path) paths.push(bindingInfo.path);
+      for (const part of bindingInfo.parts || []) {
+        if (part?.path) paths.push(part.path);
+      }
+
+      return paths.includes(property);
+    });
+  }
+
+  function syncApprovalFields(model, ctx, reason) {
+    const changes = {};
+
+    for (const pair of approvalFieldPairs) {
+      const visibleValue = model.getProperty(pair.visible, ctx);
+      const approvedValue = model.getProperty(pair.approved, ctx);
+
+      if (clean(visibleValue) === clean(approvedValue)) {
+        continue;
+      }
+
+      model.setProperty(pair.approved, visibleValue, ctx);
+      changes[pair.approved] = visibleValue;
+    }
+
+    if (Object.keys(changes).length) {
+      console.info(
+        "[CX F2403 POC] Campos de aprobación sincronizados",
+        { reason, ...changes }
+      );
+    }
+  }
+
+  function scheduleApprovalFieldSync(view, model, ctx) {
+    const scheduleSync = (reason) => {
+      window.setTimeout(
+        () => syncApprovalFields(model, ctx, reason),
+        0
+      );
+    };
+
     if (
-      externalSmartTable &&
-      typeof externalSmartTable.attachDataReceived === "function"
+      !approvalModelListenerAttached &&
+      typeof model.attachPropertyChange === "function"
     ) {
-      externalSmartTable.attachDataReceived(applyExternal);
+      model.attachPropertyChange((event) => {
+        const path = clean(event.getParameter?.("path"));
+        const property = path.split("/").filter(Boolean).pop();
+
+        if (
+          approvalFieldPairs.some((pair) => pair.visible === property)
+        ) {
+          scheduleSync("model-property-change");
+        }
+      });
+      approvalModelListenerAttached = true;
     }
 
     /*
-     * Los SmartTables pueden bindearse antes o después de entrar al paso Partes.
-     * Probamos de inmediato y dejamos algunos reintentos no bloqueantes como
-     * respaldo; dataReceived cubre los rebinds posteriores.
+     * El evento propertyChange cubre la edición two-way del modelo. También
+     * conectamos los controles visibles como respaldo para SmartField/inputs
+     * que actualizan el binding durante su propio evento change.
      */
-    [0, 250, 750, 1500, 3000, 5000, 8000, 12000, 20000].forEach(
-      (delay) => {
-        window.setTimeout(() => {
-          applyEntities();
-          applyExternal();
-        }, delay);
-      }
-    );
-  }
-
-  function getRows(smartTable) {
-    if (!smartTable || typeof smartTable.getTable !== "function") {
-      return [];
-    }
-    const table = smartTable.getTable();
-    return table && typeof table.getItems === "function"
-      ? table.getItems()
-      : [];
-  }
-
-  function applyEntityPrefill(smartTable, model) {
-    if (!cxClientBp) return;
-
-    for (const row of getRows(smartTable)) {
-      const rowCtx = row.getBindingContext?.();
-      if (!rowCtx) continue;
-
-      const path = rowCtx.getPath();
-      const entity = model.getObject(path) || {};
-      const typeName = normalize(
-        entity.LglCntntMEntityTypeName || entity.LglCntntMEntityName
-      );
-
-      if (!typeName.includes("cliente")) continue;
-
-      let property = "";
-      switch (clean(entity.LglCntntMTechEntityType)) {
-        case "02":
-          property = "LglCntntMEntityCustomer";
-          break;
-        case "06":
-          property = "LglCntntMEntityBusinessPartner";
-          break;
-        default:
-          console.warn(
-            "[CX F2403 POC] Se encontró la entidad Cliente, pero su tipo técnico no está soportado para prefill automático.",
-            {
-              path,
-              type: entity.LglCntntMEntityType,
-              typeName: entity.LglCntntMEntityTypeName,
-              technicalType: entity.LglCntntMTechEntityType,
-              clientTypeFromCx: cxClientType
+    [0, 250, 750, 1500, 3000, 5000].forEach((delay) => {
+      window.setTimeout(() => {
+        for (const pair of approvalFieldPairs) {
+          for (const control of boundValueControls(view, pair.visible)) {
+            if (
+              approvalSyncControls.has(control) ||
+              typeof control.attachChange !== "function"
+            ) {
+              continue;
             }
-          );
-          continue;
-      }
 
-      if (
-        populatedEntityPaths.has(path) &&
-        clean(model.getProperty(property, rowCtx)) === cxClientBp
-      ) {
-        continue;
-      }
-
-      model.setProperty(property, cxClientBp, rowCtx);
-      fireBoundValueChange(row, property, cxClientBp);
-      populatedEntityPaths.add(path);
-
-      console.info(
-        "[CX F2403 POC] Cliente precargado en Entidades",
-        {
-          path,
-          property,
-          value: cxClientBp,
-          technicalType: entity.LglCntntMTechEntityType
+            control.attachChange(() => {
+              scheduleSync("control-change");
+            });
+            approvalSyncControls.add(control);
+          }
         }
-      );
-    }
-  }
-
-  function applyExternalContactPrefill(smartTable, model) {
-    if (!cxSignerBp && !cxPrimaryContactBp) return;
-
-    for (const row of getRows(smartTable)) {
-      const rowCtx = row.getBindingContext?.();
-      if (!rowCtx) continue;
-
-      const path = rowCtx.getPath();
-      const contact = model.getObject(path) || {};
-      const type = clean(contact.LglCntntMExtCntctType);
-      const typeName = normalize(contact.LglCntntMExtCntctTypeName);
-
-      let value = "";
-      let role = "";
-
-      if (
-        type === "0001" ||
-        typeName.includes("contacto principal")
-      ) {
-        value = cxPrimaryContactBp;
-        role = "Contacto principal";
-      } else if (
-        type === "0002" ||
-        typeName === "firmante" ||
-        typeName.includes("firmante")
-      ) {
-        value = cxSignerBp;
-        role = "Firmante";
-      }
-
-      if (!value) continue;
-
-      if (
-        populatedExternalContactPaths.has(path) &&
-        clean(model.getProperty("LglCntntMExtCntctBP", rowCtx)) === value
-      ) {
-        continue;
-      }
-
-      model.setProperty("LglCntntMExtCntctBP", value, rowCtx);
-      fireBoundValueChange(row, "LglCntntMExtCntctBP", value);
-      populatedExternalContactPaths.add(path);
-
-      console.info(
-        "[CX F2403 POC] Contacto externo precargado",
-        { path, role, type, value }
-      );
-    }
+      }, delay);
+    });
   }
 
   function fireBoundValueChange(container, property, value) {
@@ -627,8 +577,8 @@
        * Estos campos se aplican después de inicializar el contexto porque
        * F2403 puede recalcular el modelo al ejecutar GET_STEP_SEQUENCE.
        */
+      scheduleApprovalFieldSync(view, model, ctx);
       applyExtendedHeaderPrefill(view, model, ctx);
-      schedulePartyPrefill(view, model);
       win.sap.ui.getCore().applyChanges();
 
       const result = model.getObject(ctx.getPath());
@@ -648,10 +598,7 @@
           cxAmountSource: cxAmountSource || null,
           cxCurrency: cxCurrency || null,
           cxProduct: cxProduct || null,
-          cxClientBp: cxClientBp || null,
-          cxClientType: cxClientType || null,
-          cxPrimaryContactBp: cxPrimaryContactBp || null,
-          cxSignerBp: cxSignerBp || null,
+          parties: "manual",
           cxPep,
           LegalTransactionTitle:
             result.LegalTransactionTitle,
