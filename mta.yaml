@@ -17,10 +17,11 @@ modules:
       # frame-ancestors explícita tanto a /poc como a las respuestas /sap.
       SEND_XFRAMEOPTIONS: "false"
       CX_FRAME_ANCESTOR: "https://my1002084.us1.test.crm.cloud.sap"
-      GPC_FRAME_ANCESTOR: "https://gpc-creacion-solicitud-contrato.cfapps.us10-001.hana.ondemand.com"
+      # El padre efectivo del proxy será el AppRouter autenticado del BFF.
+      GPC_FRAME_ANCESTOR: "https://gpc-creacion-solicitud-contrato-router.cfapps.us10-001.hana.ondemand.com"
       BAS_FRAME_ANCESTOR: "https://*.applicationstudio.cloud.sap"
-      # EXTRA_FRAME_ANCESTORS puede definirse como lista separada por comas
-      # mediante cf set-env cuando sea necesario habilitar otro origen aprobado.
+      # Conserva temporalmente el origen anterior para rollback.
+      EXTRA_FRAME_ANCESTORS: "https://gpc-creacion-solicitud-contrato.cfapps.us10-001.hana.ondemand.com"
     requires:
       - name: gpc-fiori-proxy-xsuaa
       - name: gpc-fiori-proxy-destination
