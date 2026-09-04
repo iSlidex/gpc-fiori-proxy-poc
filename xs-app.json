@@ -6,13 +6,15 @@
       "source": "^/poc/(.*)$",
       "target": "$1",
       "localDir": "webapp/poc",
-      "authenticationType": "none"
+      "authenticationType": "xsuaa",
+      "identityProvider": "sap.custom"
     },
     {
       "source": "^/sap/(.*)$",
       "target": "/sap/$1",
       "destination": "S4CXMashup",
       "authenticationType": "xsuaa",
+      "identityProvider": "sap.custom",
       "csrfProtection": false
     }
   ]
