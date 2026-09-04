@@ -5,7 +5,9 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "check": "node --check index.js && node --check webapp/poc/frame-unlock.js && node --check webapp/poc/request-contract.js",
+    "test": "node --test"
   },
   "keywords": [],
   "author": "",
