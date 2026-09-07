@@ -38,6 +38,7 @@
     cxSalesCycleDescription
   );
   const iframe = document.getElementById("fiori");
+  if (params.get("cxTitleFormat") === "v1") iframe.style.visibility = "hidden";
   const status = document.getElementById("status");
 
   let prefillApplied = false;
@@ -581,6 +582,22 @@
       applyExtendedHeaderPrefill(view, model, ctx);
       win.sap.ui.getCore().applyChanges();
 
+      if (params.get("cxTitleFormat") === "v1") {
+        const title = buildContractTitle(params.get("cxCompanyInitials"), params.get("cxClientName"),
+          model.getProperty("LglCntntMContextTitle", ctx), cxOpportunityId);
+        model.setProperty("LegalTransactionTitle", title, ctx);
+        // El título identifica la oportunidad: se mantiene íntegro durante la edición.
+        for (const control of boundValueControls(view, "LegalTransactionTitle")) {
+          if (typeof control.setEditable === "function") control.setEditable(false);
+        }
+        if (typeof model.attachPropertyChange === "function") model.attachPropertyChange(() => {
+          if (model.getProperty("LegalTransactionTitle", ctx) !== title) {
+            model.setProperty("LegalTransactionTitle", title, ctx);
+          }
+        });
+        win.sap.ui.getCore().applyChanges();
+      }
+
       const result = model.getObject(ctx.getPath());
 
       console.log(
@@ -629,6 +646,7 @@
         }
       );
 
+      iframe.style.visibility = "visible";
       prefillApplied = true;
       hideStatus();
     } catch (error) {
@@ -663,3 +681,15 @@
 
   iframe.src = fioriSrc;
 })();
+
+function buildContractTitle(initials, client, context, id) {
+  const cleanPart = value => String(value || '').trim().replace(/\s+/g, ' ');
+  const parts = [initials, client, context].map(cleanPart);
+  if (parts.some(part => !part) || !/^\d+$/.test(String(id))) {
+    throw new Error('Faltan siglas de sociedad, cliente, contexto o ID de oportunidad para el título.');
+  }
+  const suffix = `. CX-OPP-${id}`;
+  const title = `${parts[0]}. ${parts[1]}. CONTRATO ${parts[2]}${suffix}`;
+  if (title.length > 128) throw new Error('El título supera 128 caracteres. Debe acordarse una abreviatura de sociedad, cliente o contexto; el ID de oportunidad no se recorta.');
+  return title;
+}
