@@ -8,6 +8,18 @@ modules:
   - name: gpc-fiori-proxy-approuter
     type: approuter.nodejs
     path: .
+    build-parameters:
+      ignore:
+        - mta_archives/
+        - "*.mtar"
+        - "*_mta_build_tmp/"
+        - .git/
+        - .github/
+        - .vscode/
+        - test/
+        - "*.har"
+        - "*.log"
+        - "Makefile_*.mta"
     parameters:
       memory: 256M
       disk-quota: 1G
