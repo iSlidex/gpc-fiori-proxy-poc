@@ -688,7 +688,7 @@ function buildContractTitle(initials, client, context, id) {
   if (parts.some(part => !part) || !/^\d+$/.test(String(id))) {
     throw new Error('Faltan siglas de sociedad, cliente, contexto o ID de oportunidad para el título.');
   }
-  const suffix = `. CX-OPP-${id}`;
+  const suffix = `. CX${id}`;
   const title = `${parts[0]}. ${parts[1]}. CONTRATO ${parts[2]}${suffix}`;
   if (title.length > 128) throw new Error('El título supera 128 caracteres. Debe acordarse una abreviatura de sociedad, cliente o contexto; el ID de oportunidad no se recorta.');
   return title;
