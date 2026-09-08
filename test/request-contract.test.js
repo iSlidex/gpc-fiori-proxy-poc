@@ -16,10 +16,15 @@ test('precarga cliente y organización con claves S/4 y deja contactos manuales'
 
   assert.match(source, /params\.get\("cxClientBp"\)/);
   assert.match(source, /params\.get\("cxSalesOrganization"\)/);
+  assert.match(source, /params\.get\("cxSalesOrganizationName"\)/);
   assert.match(source, /type:\s*"0002"[\s\S]*label:\s*"Cliente"/);
   assert.match(source, /type:\s*"0004"[\s\S]*label:\s*"Organización de ventas"/);
   assert.match(source, /key\.startsWith\("C_LegalTransactionEntity\("\)/);
-  assert.match(source, /`\$\{rowPath\}\/LglCntntMEntity`/);
+  assert.match(source, /property:\s*"LglCntntMEntityCustomer"/);
+  assert.match(source, /property:\s*"LglCntntMEntitySlsOrg"/);
+  assert.match(source, /C_LCMContactsOfCustomerVH/);
+  assert.match(source, /C_LCMSalesOrganizationVH/);
+  assert.match(source, /`\$\{rowPath\}\/LglCntntMEntityName`/);
   assert.match(source, /validateEntityWhenControlIsReady/);
   assert.doesNotMatch(source, /key\.startsWith\("C_LCMEntityTypeValueHelp/);
   assert.match(source, /contacts:\s*"manual"/);
