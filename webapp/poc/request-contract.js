@@ -15,6 +15,10 @@
   const cxCurrency = clean(params.get("cxCurrency"));
   const cxAmountSource = clean(params.get("cxAmountSource"));
   const cxProduct = clean(params.get("cxProduct"));
+  const cxClientBp = clean(params.get("cxClientBp"));
+  const cxSalesOrganization = clean(
+    params.get("cxSalesOrganization")
+  );
   const cxPep = parseOptionalBoolean(params.get("cxPep"));
 
   /*
@@ -504,6 +508,92 @@
     }
   }
 
+  async function applyEntityPrefill(view, model) {
+    let pendingEntities = [
+      {
+        type: "0002",
+        label: "Cliente",
+        value: cxClientBp
+      },
+      {
+        type: "0004",
+        label: "Organización de ventas",
+        value: cxSalesOrganization
+      }
+    ].filter((entity) => entity.value);
+
+    if (!pendingEntities.length) return;
+
+    /*
+     * Las entidades de Partes son registros transitorios separados de la
+     * cabecera. Después de GET_STEP_SEQUENCE buscamos los controles por su
+     * binding y escribimos la clave S/4 en el contexto de la fila correcta.
+     */
+    for (let attempt = 0; attempt < 40; attempt++) {
+      const controls = boundValueControls(view, "LglCntntMEntity");
+      const nextPending = [];
+
+      for (const requested of pendingEntities) {
+        const control = controls.find((candidate) => {
+          const rowContext = candidate.getBindingContext?.();
+          const row = rowContext
+            ? model.getObject(rowContext.getPath())
+            : null;
+          return clean(row?.LglCntntMEntityType) === requested.type;
+        });
+
+        if (!control) {
+          nextPending.push(requested);
+          continue;
+        }
+
+        const rowContext = control.getBindingContext();
+        model.setProperty("LglCntntMEntity", requested.value, rowContext);
+
+        try {
+          if (typeof control.fireChangeModelValue === "function") {
+            control.fireChangeModelValue();
+          } else if (typeof control.fireChange === "function") {
+            control.fireChange({
+              value: requested.value,
+              newValue: requested.value
+            });
+          } else if (typeof control.fireEvent === "function") {
+            control.fireEvent("change", {
+              value: requested.value,
+              newValue: requested.value
+            });
+          }
+        } catch (error) {
+          console.warn(
+            `[CX F2403 POC] ${requested.label} se escribió, pero no se pudo disparar su validación.`,
+            error
+          );
+        }
+      }
+
+      pendingEntities = nextPending;
+
+      if (!pendingEntities.length) {
+        console.info("[CX F2403 POC] Entidades precargadas", {
+          client: cxClientBp || null,
+          salesOrganization: cxSalesOrganization || null
+        });
+        return;
+      }
+
+      await sleep(250);
+    }
+
+    console.warn(
+      "[CX F2403 POC] No se encontraron a tiempo las filas de Partes para completar el prefill.",
+      {
+        client: cxClientBp || null,
+        salesOrganization: cxSalesOrganization || null
+      }
+    );
+  }
+
   async function applyPrefill() {
     if (prefillApplied) {
       return;
@@ -594,6 +684,17 @@
        */
       scheduleApprovalFieldSync(view, model, ctx);
       applyExtendedHeaderPrefill(view, model, ctx);
+      /*
+       * La vista no debe quedar oculta esperando a que el paso Partes se
+       * materialice. El retry continúa en segundo plano mientras el usuario
+       * revisa los primeros pasos.
+       */
+      applyEntityPrefill(view, model).catch((error) => {
+        console.warn(
+          "[CX F2403 POC] Falló el prefill asíncrono de Partes.",
+          error
+        );
+      });
       win.sap.ui.getCore().applyChanges();
 
       if (params.get("cxTitleFormat") === "v1") {
@@ -629,7 +730,12 @@
           cxAmountSource: cxAmountSource || null,
           cxCurrency: cxCurrency || null,
           cxProduct: cxProduct || null,
-          parties: "manual",
+          parties: {
+            client: cxClientBp || "manual",
+            salesOrganization:
+              cxSalesOrganization || "manual",
+            contacts: "manual"
+          },
           cxPep,
           LegalTransactionTitle:
             result.LegalTransactionTitle,
