@@ -11,23 +11,17 @@ const sourcePath = path.join(
   'request-contract.js'
 );
 
-test('mantiene los participantes fuera del prefill automático', async () => {
+test('precarga cliente y organización con claves S/4 y deja contactos manuales', async () => {
   const source = await readFile(sourcePath, 'utf8');
 
-  for (const parameter of [
-    'cxClientBp',
-    'cxClientType',
-    'cxPrimaryContactBp',
-    'cxSignerBp'
-  ]) {
-    assert.equal(
-      source.includes(parameter),
-      false,
-      `${parameter} no debe ser leído ni escrito por el proxy`
-    );
-  }
-
-  assert.match(source, /parties:\s*"manual"/);
+  assert.match(source, /params\.get\("cxClientBp"\)/);
+  assert.match(source, /params\.get\("cxSalesOrganization"\)/);
+  assert.match(source, /type:\s*"0002"[\s\S]*label:\s*"Cliente"/);
+  assert.match(source, /type:\s*"0004"[\s\S]*label:\s*"Organización de ventas"/);
+  assert.match(source, /model\.setProperty\("LglCntntMEntity", requested\.value, rowContext\)/);
+  assert.match(source, /contacts:\s*"manual"/);
+  assert.doesNotMatch(source, /cxPrimaryContactBp/);
+  assert.doesNotMatch(source, /cxSignerBp/);
 });
 
 test('sincroniza monto y moneda visibles con sus campos de aprobación', async () => {
