@@ -16,8 +16,12 @@
   const cxAmountSource = clean(params.get("cxAmountSource"));
   const cxProduct = clean(params.get("cxProduct"));
   const cxClientBp = clean(params.get("cxClientBp"));
+  const cxClientName = clean(params.get("cxClientName"));
   const cxSalesOrganization = clean(
     params.get("cxSalesOrganization")
+  );
+  const cxSalesOrganizationName = clean(
+    params.get("cxSalesOrganizationName")
   );
   const cxPep = parseOptionalBoolean(params.get("cxPep"));
 
@@ -515,12 +519,22 @@
       {
         type: "0002",
         label: "Cliente",
-        value: cxClientBp
+        value: cxClientBp,
+        property: "LglCntntMEntityCustomer",
+        nameProperty: "BusinessPartnerName",
+        fallbackName: cxClientName,
+        valueHelpPath:
+          `/C_LCMContactsOfCustomerVH(Customer='${escapeODataString(cxClientBp)}',CompanyCode='${escapeODataString(cxSalesOrganization)}')`
       },
       {
         type: "0004",
         label: "Organización de ventas",
-        value: cxSalesOrganization
+        value: cxSalesOrganization,
+        property: "LglCntntMEntitySlsOrg",
+        nameProperty: "SalesOrganization_Text",
+        fallbackName: cxSalesOrganizationName,
+        valueHelpPath:
+          `/C_LCMSalesOrganizationVH('${escapeODataString(cxSalesOrganization)}')`
       }
     ].filter((entity) => entity.value);
 
@@ -553,10 +567,36 @@
         }
 
         const rowPath = `/${match[0].replace(/^\/+/, "")}`;
-        const applied = model.setProperty(
-          `${rowPath}/LglCntntMEntity`,
-          requested.value
-        );
+        let valueHelp = {};
+
+        try {
+          valueHelp = await readODataEntity(
+            model,
+            requested.valueHelpPath
+          );
+        } catch (error) {
+          if (!requested.fallbackName) {
+            console.warn(
+              `[CX F2403 POC] No fue posible resolver ${requested.label} en su value help.`,
+              { path: requested.valueHelpPath, error }
+            );
+            nextPending.push(requested);
+            continue;
+          }
+        }
+
+        const entityName = clean(
+          valueHelp?.[requested.nameProperty]
+        ) || requested.fallbackName;
+        const applied =
+          model.setProperty(
+            `${rowPath}/${requested.property}`,
+            requested.value
+          ) &&
+          model.setProperty(
+            `${rowPath}/LglCntntMEntityName`,
+            entityName
+          );
 
         if (!applied) {
           nextPending.push(requested);
@@ -592,6 +632,19 @@
     );
   }
 
+  function escapeODataString(value) {
+    return clean(value).replace(/'/g, "''");
+  }
+
+  function readODataEntity(model, path) {
+    return new Promise((resolve, reject) => {
+      model.read(path, {
+        success: resolve,
+        error: reject
+      });
+    });
+  }
+
   async function validateEntityWhenControlIsReady(
     view,
     rowPath,
@@ -600,7 +653,7 @@
     for (let attempt = 0; attempt < 40; attempt++) {
       const control = boundValueControls(
         view,
-        "LglCntntMEntity"
+        requested.property
       ).find((candidate) =>
         candidate.getBindingContext?.()?.getPath() === rowPath
       );
