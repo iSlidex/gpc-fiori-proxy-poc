@@ -388,7 +388,9 @@
         if (part?.path) paths.push(part.path);
       }
 
-      return paths.includes(property);
+      return paths.some((path) =>
+        clean(path).split("/").filter(Boolean).pop() === property
+      );
     });
   }
 
@@ -526,50 +528,46 @@
 
     /*
      * Las entidades de Partes son registros transitorios separados de la
-     * cabecera. Después de GET_STEP_SEQUENCE buscamos los controles por su
-     * binding y escribimos la clave S/4 en el contexto de la fila correcta.
+     * cabecera. Después de GET_STEP_SEQUENCE aparecen directamente en el
+     * cache OData como C_LegalTransactionEntity(...), incluso antes de que
+     * UI5 materialice los controles del paso Partes.
      */
     for (let attempt = 0; attempt < 40; attempt++) {
-      const controls = boundValueControls(view, "LglCntntMEntity");
+      const entityRows = Object.entries(model.oData || {}).filter(
+        ([key, row]) =>
+          key.startsWith("C_LegalTransactionEntity(") &&
+          row &&
+          row.LglCntntMEntityType
+      );
       const nextPending = [];
 
       for (const requested of pendingEntities) {
-        const control = controls.find((candidate) => {
-          const rowContext = candidate.getBindingContext?.();
-          const row = rowContext
-            ? model.getObject(rowContext.getPath())
-            : null;
-          return clean(row?.LglCntntMEntityType) === requested.type;
-        });
+        const match = entityRows.find(([, row]) =>
+          clean(row.LglCntntMEntityType).padStart(4, "0") ===
+            requested.type
+        );
 
-        if (!control) {
+        if (!match) {
           nextPending.push(requested);
           continue;
         }
 
-        const rowContext = control.getBindingContext();
-        model.setProperty("LglCntntMEntity", requested.value, rowContext);
+        const rowPath = `/${match[0].replace(/^\/+/, "")}`;
+        const applied = model.setProperty(
+          `${rowPath}/LglCntntMEntity`,
+          requested.value
+        );
 
-        try {
-          if (typeof control.fireChangeModelValue === "function") {
-            control.fireChangeModelValue();
-          } else if (typeof control.fireChange === "function") {
-            control.fireChange({
-              value: requested.value,
-              newValue: requested.value
-            });
-          } else if (typeof control.fireEvent === "function") {
-            control.fireEvent("change", {
-              value: requested.value,
-              newValue: requested.value
-            });
-          }
-        } catch (error) {
-          console.warn(
-            `[CX F2403 POC] ${requested.label} se escribió, pero no se pudo disparar su validación.`,
-            error
-          );
+        if (!applied) {
+          nextPending.push(requested);
+          continue;
         }
+
+        validateEntityWhenControlIsReady(
+          view,
+          rowPath,
+          requested
+        );
       }
 
       pendingEntities = nextPending;
@@ -591,6 +589,53 @@
         client: cxClientBp || null,
         salesOrganization: cxSalesOrganization || null
       }
+    );
+  }
+
+  async function validateEntityWhenControlIsReady(
+    view,
+    rowPath,
+    requested
+  ) {
+    for (let attempt = 0; attempt < 40; attempt++) {
+      const control = boundValueControls(
+        view,
+        "LglCntntMEntity"
+      ).find((candidate) =>
+        candidate.getBindingContext?.()?.getPath() === rowPath
+      );
+
+      if (!control) {
+        await sleep(250);
+        continue;
+      }
+
+      try {
+        if (typeof control.fireChangeModelValue === "function") {
+          control.fireChangeModelValue();
+        } else if (typeof control.fireChange === "function") {
+          control.fireChange({
+            value: requested.value,
+            newValue: requested.value
+          });
+        } else if (typeof control.fireEvent === "function") {
+          control.fireEvent("change", {
+            value: requested.value,
+            newValue: requested.value
+          });
+        }
+      } catch (error) {
+        console.warn(
+          `[CX F2403 POC] ${requested.label} se escribió, pero no se pudo disparar su validación.`,
+          error
+        );
+      }
+      return;
+    }
+
+    console.warn(
+      `[CX F2403 POC] ${requested.label} fue escrito en el modelo; su control aún no estaba disponible para disparar la validación.`,
+      { rowPath, value: requested.value }
     );
   }
 
