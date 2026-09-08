@@ -45,3 +45,13 @@ test('sincroniza monto y moneda visibles con sus campos de aprobación', async (
   assert.match(source, /attachChange/);
   assert.match(source, /syncApprovalFields/);
 });
+
+test('elimina el contexto inmobiliario obsoleto y exige uno de los nuevos', async () => {
+  const source = await readFile(sourcePath, 'utf8');
+  assert.doesNotMatch(source, /["']10["']\s*:\s*["']20098["']/);
+  for (const id of ['20150', '20151', '20152', '20153']) {
+    assert.match(source, new RegExp(`["']${id}["']`));
+  }
+  assert.match(source, /division === ["']10["']/);
+  assert.match(source, /realEstateContexts\.includes\(override\)/);
+});
