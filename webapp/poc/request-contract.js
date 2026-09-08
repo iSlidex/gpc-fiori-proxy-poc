@@ -25,7 +25,6 @@
    * El ID histórico 20012 no se usa porque F2403 no logra inicializarlo.
    */
   const contextByDivision = Object.freeze({
-    "10": "20098",
     "11": "20096",
     "60": "20107",
     "70": "20125"
@@ -82,6 +81,20 @@
     salesCycle,
     salesCycleDescription
   ) {
+    if (division === "10") {
+      const realEstateContexts = ["20150", "20151", "20152", "20153"];
+      if (realEstateContexts.includes(override)) {
+        return override;
+      }
+      if (override) {
+        console.error(
+          "[CX F2403 POC] Contexto inmobiliario no permitido.",
+          { division, override }
+        );
+      }
+      return "";
+    }
+
     if (division === "70") {
       if (isTenderSalesCycle(salesCycle, salesCycleDescription)) {
         return "20099";
@@ -513,9 +526,10 @@
 
       if (!cxContext) {
         throw new Error(
-          "La división CX " +
-          cxDivision +
-          " no tiene un contexto S/4 válido para los parámetros recibidos."
+          cxDivision === "10"
+            ? "CX no envió uno de los contextos inmobiliarios válidos (20150-20153)."
+            : "La división CX " + cxDivision +
+              " no tiene un contexto S/4 válido para los parámetros recibidos."
         );
       }
 
