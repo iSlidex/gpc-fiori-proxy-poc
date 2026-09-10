@@ -4,7 +4,16 @@
   const params = new URLSearchParams(window.location.search);
 
   const cxTitle = clean(params.get("cxTitle"));
+  const cxSourceType = clean(params.get("cxSourceType")).toUpperCase() ||
+    "OPPORTUNITY";
   const cxOpportunityId = clean(params.get("cxOpportunityId"));
+  const cxServiceOrderUuid = clean(params.get("cxServiceOrderUuid"));
+  const cxServiceOrderDisplayId = clean(
+    params.get("cxServiceOrderDisplayId")
+  );
+  const cxServiceOrderExternalId = clean(
+    params.get("cxServiceOrderExternalId")
+  );
   const cxDivision = clean(params.get("cxDivision"));
   const requestedContext = clean(params.get("cxContext"));
   const cxSalesCycle = clean(params.get("cxSalesCycle"));
@@ -33,6 +42,11 @@
     "11": "20096",
     "60": "20107",
     "70": "20125"
+  });
+  const serviceContexts = Object.freeze({
+    "20140": "Servicios",
+    "20141": "Solicitud de Servicio / Servicios",
+    "20142": "Solicitud Interna de Servicio / Servicios"
   });
 
   const cxContext = resolveContext(
@@ -75,6 +89,17 @@
     salesCycle,
     salesCycleDescription
   ) {
+    if (cxSourceType === "SERVICE_ORDER") {
+      if (!override) return "20141";
+      if (serviceContexts[override]) return override;
+
+      console.error(
+        "[CX F2403 POC] Contexto de Service Order no permitido.",
+        { override, allowedContexts: Object.keys(serviceContexts) }
+      );
+      return "";
+    }
+
     if (division === "70") {
       if (isTenderSalesCycle(salesCycle, salesCycleDescription)) {
         return "20099";
@@ -550,13 +575,13 @@
 
       if (!cxTitle) {
         throw new Error(
-          "CX no envió el título de la Opportunity (cxTitle)."
+          "CX no envió el título del objeto origen (cxTitle)."
         );
       }
 
       if (!cxDivision) {
         throw new Error(
-          "CX no envió la división de la Opportunity (cxDivision)."
+          "CX no envió la división del objeto origen (cxDivision)."
         );
       }
 
@@ -568,9 +593,19 @@
         );
       }
 
-      if (!cxOpportunityId) {
+      if (cxSourceType === "OPPORTUNITY" && !cxOpportunityId) {
         console.warn(
           "[CX F2403 POC] CX no envió cxOpportunityId."
+        );
+      }
+      if (
+        cxSourceType === "SERVICE_ORDER" &&
+        !cxServiceOrderUuid &&
+        !cxServiceOrderExternalId &&
+        !cxServiceOrderDisplayId
+      ) {
+        console.warn(
+          "[CX F2403 POC] CX no envió un identificador de Service Order."
         );
       }
 
@@ -637,7 +672,11 @@
         "[CX F2403 POC] Prefill aplicado",
         {
           cxTitle,
+          cxSourceType,
           cxOpportunityId,
+          cxServiceOrderUuid: cxServiceOrderUuid || null,
+          cxServiceOrderDisplayId: cxServiceOrderDisplayId || null,
+          cxServiceOrderExternalId: cxServiceOrderExternalId || null,
           cxDivision,
           requestedContext: requestedContext || null,
           cxSalesCycle: cxSalesCycle || null,
