@@ -4,7 +4,19 @@
   const params = new URLSearchParams(window.location.search);
 
   const cxTitle = clean(params.get("cxTitle"));
+  const cxSourceType = clean(params.get("cxSourceType")).toUpperCase() ||
+    "OPPORTUNITY";
   const cxOpportunityId = clean(params.get("cxOpportunityId"));
+  const cxServiceOrderUuid = clean(params.get("cxServiceOrderUuid"));
+  const cxServiceOrderDisplayId = clean(
+    params.get("cxServiceOrderDisplayId")
+  );
+  const cxServiceOrderExternalId = clean(
+    params.get("cxServiceOrderExternalId")
+  );
+  const cxCaseUuid = clean(params.get("cxCaseUuid"));
+  const cxCaseDisplayId = clean(params.get("cxCaseDisplayId"));
+  const cxCaseType = clean(params.get("cxCaseType")).toUpperCase();
   const cxDivision = clean(params.get("cxDivision"));
   const requestedContext = clean(params.get("cxContext"));
   const cxSalesCycle = clean(params.get("cxSalesCycle"));
@@ -15,6 +27,9 @@
   const cxCurrency = clean(params.get("cxCurrency"));
   const cxAmountSource = clean(params.get("cxAmountSource"));
   const cxProduct = clean(params.get("cxProduct"));
+  const cxTechnicalLocation = clean(params.get("cxTechnicalLocation"));
+  const cxStartDate = clean(params.get("cxStartDate"));
+  const cxEndDate = clean(params.get("cxEndDate"));
   const cxClientBp = clean(params.get("cxClientBp"));
   const cxClientType = clean(params.get("cxClientType"));
   const cxPrimaryContactBp = clean(params.get("cxPrimaryContactBp"));
@@ -33,6 +48,14 @@
     "11": "20096",
     "60": "20107",
     "70": "20125"
+  });
+  const serviceContexts = Object.freeze({
+    "20141": "Solicitud de Servicio / Servicios",
+    "20142": "Solicitud Interna de Servicio / Servicios"
+  });
+  const serviceContextByCaseType = Object.freeze({
+    Z001: "20141",
+    Z006: "20142"
   });
 
   const cxContext = resolveContext(
@@ -75,6 +98,30 @@
     salesCycle,
     salesCycleDescription
   ) {
+    if (cxSourceType === "SERVICE_ORDER") {
+      const expectedContext = serviceContextByCaseType[cxCaseType];
+      if (!expectedContext) {
+        console.error(
+          "[CX F2403 POC] Tipo de caso no habilitado para Service Order.",
+          { caseType: cxCaseType || null, supportedCaseTypes: ["Z001", "Z006"] }
+        );
+        return "";
+      }
+      if (!override) return expectedContext;
+      if (override === expectedContext) return override;
+
+      console.error(
+        "[CX F2403 POC] El contexto no corresponde al tipo de caso de Service Order.",
+        {
+          caseType: cxCaseType,
+          override,
+          expectedContext,
+          allowedContexts: Object.keys(serviceContexts)
+        }
+      );
+      return "";
+    }
+
     if (division === "70") {
       if (isTenderSalesCycle(salesCycle, salesCycleDescription)) {
         return "20099";
@@ -275,7 +322,7 @@
       model.setProperty("ZZ1_PersonaespecialPEP_LTH", cxPep, ctx);
     }
 
-    if (cxProduct) {
+    if (cxSourceType !== "SERVICE_ORDER" && cxProduct) {
       const productProperty = findProductProperty(model, ctx);
       if (productProperty) {
         model.setProperty(productProperty, cxProduct, ctx);
@@ -550,13 +597,13 @@
 
       if (!cxTitle) {
         throw new Error(
-          "CX no envió el título de la Opportunity (cxTitle)."
+          "CX no envió el título del objeto origen (cxTitle)."
         );
       }
 
       if (!cxDivision) {
         throw new Error(
-          "CX no envió la división de la Opportunity (cxDivision)."
+          "CX no envió la división del objeto origen (cxDivision)."
         );
       }
 
@@ -568,9 +615,19 @@
         );
       }
 
-      if (!cxOpportunityId) {
+      if (cxSourceType === "OPPORTUNITY" && !cxOpportunityId) {
         console.warn(
           "[CX F2403 POC] CX no envió cxOpportunityId."
+        );
+      }
+      if (
+        cxSourceType === "SERVICE_ORDER" &&
+        !cxServiceOrderUuid &&
+        !cxServiceOrderExternalId &&
+        !cxServiceOrderDisplayId
+      ) {
+        console.warn(
+          "[CX F2403 POC] CX no envió un identificador de Service Order."
         );
       }
 
@@ -637,7 +694,14 @@
         "[CX F2403 POC] Prefill aplicado",
         {
           cxTitle,
+          cxSourceType,
           cxOpportunityId,
+          cxServiceOrderUuid: cxServiceOrderUuid || null,
+          cxServiceOrderDisplayId: cxServiceOrderDisplayId || null,
+          cxServiceOrderExternalId: cxServiceOrderExternalId || null,
+          cxCaseUuid: cxCaseUuid || null,
+          cxCaseDisplayId: cxCaseDisplayId || null,
+          cxCaseType: cxCaseType || null,
           cxDivision,
           requestedContext: requestedContext || null,
           cxSalesCycle: cxSalesCycle || null,
@@ -648,6 +712,9 @@
           cxAmountSource: cxAmountSource || null,
           cxCurrency: cxCurrency || null,
           cxProduct: cxProduct || null,
+          cxTechnicalLocation: cxTechnicalLocation || null,
+          cxStartDate: cxStartDate || null,
+          cxEndDate: cxEndDate || null,
           cxClientBp: cxClientBp || null,
           cxClientType: cxClientType || null,
           cxPrimaryContactBp: cxPrimaryContactBp || null,
