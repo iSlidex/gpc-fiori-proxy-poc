@@ -11,7 +11,7 @@ const sourcePath = path.join(
   'request-contract.js'
 );
 
-test('precarga cliente y organización con claves S/4 y deja contactos manuales', async () => {
+test('precarga cliente y organización con claves S/4', async () => {
   const source = await readFile(sourcePath, 'utf8');
 
   assert.match(source, /params\.get\("cxClientBp"\)/);
@@ -27,9 +27,33 @@ test('precarga cliente y organización con claves S/4 y deja contactos manuales'
   assert.match(source, /`\$\{rowPath\}\/LglCntntMEntityName`/);
   assert.match(source, /validateEntityWhenControlIsReady/);
   assert.doesNotMatch(source, /key\.startsWith\("C_LCMEntityTypeValueHelp/);
-  assert.match(source, /contacts:\s*"manual"/);
-  assert.doesNotMatch(source, /cxPrimaryContactBp/);
-  assert.doesNotMatch(source, /cxSignerBp/);
+});
+
+test('precarga firmante y contacto principal únicamente en el flujo de Case', async () => {
+  const source = await readFile(sourcePath, 'utf8');
+
+  assert.match(source, /params\.get\("cxSourceType"\)/);
+  assert.match(source, /params\.get\("cxPrimaryContactBp"\)/);
+  assert.match(source, /params\.get\("cxSignerBp"\)/);
+  assert.match(source, /cxSourceType !== "CASE"/);
+  assert.match(source, /key\.startsWith\("C_LegalTransactionExtContact\("\)/);
+  assert.match(source, /"0001"[\s\S]*"Contacto principal"/);
+  assert.match(source, /"0002"[\s\S]*"Firmante"/);
+  assert.match(source, /LglCntntMExtCntctBP/);
+  assert.match(source, /extContactsSmartTable/);
+  assert.match(source, /attachDataReceived/);
+});
+
+test('Case usa sus contextos y deja monto, moneda, producto y PEP vacíos', async () => {
+  const source = await readFile(sourcePath, 'utf8');
+
+  assert.match(source, /Z001:\s*"20141"/);
+  assert.match(source, /Z006:\s*"20142"/);
+  assert.match(source, /cxSourceType !== "CASE" && cxAmount/);
+  assert.match(source, /cxSourceType !== "CASE" && cxCurrency/);
+  assert.match(source, /cxSourceType !== "CASE" && cxPep !== null/);
+  assert.match(source, /cxSourceType !== "CASE" && cxProduct/);
+  assert.match(source, /ZZ1_UbicacionTecnica_LTH/);
 });
 
 test('sincroniza monto y moneda visibles con sus campos de aprobación', async () => {

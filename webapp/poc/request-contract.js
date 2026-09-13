@@ -4,7 +4,12 @@
   const params = new URLSearchParams(window.location.search);
 
   const cxTitle = clean(params.get("cxTitle"));
+  const cxSourceType = clean(params.get("cxSourceType")).toUpperCase() ||
+    "OPPORTUNITY";
   const cxOpportunityId = clean(params.get("cxOpportunityId"));
+  const cxCaseUuid = clean(params.get("cxCaseUuid"));
+  const cxCaseDisplayId = clean(params.get("cxCaseDisplayId"));
+  const cxCaseType = clean(params.get("cxCaseType")).toUpperCase();
   const cxDivision = clean(params.get("cxDivision"));
   const requestedContext = clean(params.get("cxContext"));
   const cxSalesCycle = clean(params.get("cxSalesCycle"));
@@ -23,6 +28,9 @@
   const cxSalesOrganizationName = clean(
     params.get("cxSalesOrganizationName")
   );
+  const cxPrimaryContactBp = clean(params.get("cxPrimaryContactBp"));
+  const cxSignerBp = clean(params.get("cxSignerBp"));
+  const cxTechnicalLocation = clean(params.get("cxTechnicalLocation"));
   const cxPep = parseOptionalBoolean(params.get("cxPep"));
 
   /*
@@ -37,6 +45,10 @@
     "60": "20107",
     "70": "20125"
   });
+  const contextByCaseType = Object.freeze({
+    Z001: "20141",
+    Z006: "20142"
+  });
 
   const cxContext = resolveContext(
     cxDivision,
@@ -50,6 +62,7 @@
 
   let prefillApplied = false;
   let approvalModelListenerAttached = false;
+  const populatedExternalContactPaths = new Set();
   const approvalSyncControls = new WeakSet();
   const approvalFieldPairs = Object.freeze([
     {
@@ -89,6 +102,24 @@
     salesCycle,
     salesCycleDescription
   ) {
+    if (cxSourceType === "CASE") {
+      const expectedContext = contextByCaseType[cxCaseType];
+      if (!expectedContext) {
+        console.error(
+          "[CX F2403 POC] Tipo de caso no habilitado.",
+          { caseType: cxCaseType || null, supportedCaseTypes: ["Z001", "Z006"] }
+        );
+        return "";
+      }
+      if (!override || override === expectedContext) return expectedContext;
+
+      console.error(
+        "[CX F2403 POC] El contexto no corresponde al tipo de caso.",
+        { caseType: cxCaseType, override, expectedContext }
+      );
+      return "";
+    }
+
     if (division === "10") {
       const realEstateContexts = ["20150", "20151", "20152", "20153"];
       if (realEstateContexts.includes(override)) {
@@ -271,19 +302,19 @@
      * a los controles visibles; el par MontoAprobacin conserva los
      * valores técnicos que viajan en la entidad transitoria.
      */
-    if (cxAmount) {
+    if (cxSourceType !== "CASE" && cxAmount) {
       model.setProperty("ZZ1_MontoAprobacin_LTH", cxAmount, ctx);
       model.setProperty("ZZ1_MONTO_LTH", cxAmount, ctx);
       fireBoundValueChange(view, "ZZ1_MONTO_LTH", cxAmount);
     }
 
-    if (cxCurrency) {
+    if (cxSourceType !== "CASE" && cxCurrency) {
       model.setProperty("ZZ1_MontoAprobacin_LTHC", cxCurrency, ctx);
       model.setProperty("ZZ1_MonedaMonto_LTH", cxCurrency, ctx);
       fireBoundValueChange(view, "ZZ1_MonedaMonto_LTH", cxCurrency);
     }
 
-    if (cxAmount || cxCurrency) {
+    if (cxSourceType !== "CASE" && (cxAmount || cxCurrency)) {
       console.info(
         "[CX F2403 POC] Monto y moneda precargados",
         {
@@ -299,11 +330,24 @@
       );
     }
 
-    if (cxPep !== null) {
+    if (cxSourceType !== "CASE" && cxPep !== null) {
       model.setProperty("ZZ1_PersonaespecialPEP_LTH", cxPep, ctx);
     }
 
-    if (cxProduct) {
+    if (cxSourceType === "CASE" && cxTechnicalLocation) {
+      model.setProperty(
+        "ZZ1_UbicacionTecnica_LTH",
+        cxTechnicalLocation,
+        ctx
+      );
+      fireBoundValueChange(
+        view,
+        "ZZ1_UbicacionTecnica_LTH",
+        cxTechnicalLocation
+      );
+    }
+
+    if (cxSourceType !== "CASE" && cxProduct) {
       const productProperty = findProductProperty(model, ctx);
       if (productProperty) {
         model.setProperty(productProperty, cxProduct, ctx);
@@ -319,7 +363,10 @@
       }
     }
 
-    if (cxAmountSource === "opportunityFallback") {
+    if (
+      cxSourceType !== "CASE" &&
+      cxAmountSource === "opportunityFallback"
+    ) {
       console.warn(
         "[CX F2403 POC] Monto precargado desde Opportunity como fallback. Funcionalmente el origen definitivo debe ser la cotización aprobada."
       );
@@ -632,6 +679,118 @@
     );
   }
 
+  function scheduleExternalContactPrefill(view, model) {
+    if (
+      cxSourceType !== "CASE" ||
+      (!cxPrimaryContactBp && !cxSignerBp)
+    ) {
+      return;
+    }
+
+    const smartTable = view.byId("extContactsSmartTable");
+    const apply = () => applyExternalContactPrefill(
+      view,
+      model,
+      smartTable
+    );
+
+    if (
+      smartTable &&
+      typeof smartTable.attachDataReceived === "function"
+    ) {
+      smartTable.attachDataReceived(apply);
+    }
+
+    /*
+     * Las filas de contactos externos se materializan al entrar al paso
+     * Partes. dataReceived cubre ese momento; los reintentos cubren los
+     * casos en que F2403 ya cargó las filas antes de enlazar el listener.
+     */
+    [0, 250, 750, 1500, 3000, 5000, 8000, 12000, 20000].forEach(
+      (delay) => window.setTimeout(apply, delay)
+    );
+  }
+
+  function applyExternalContactPrefill(view, model, smartTable) {
+    const requestedByType = {
+      "0001": {
+        label: "Contacto principal",
+        value: cxPrimaryContactBp
+      },
+      "0002": {
+        label: "Firmante",
+        value: cxSignerBp
+      }
+    };
+
+    const rowsByPath = new Map(
+      getSmartTableRows(smartTable).map((row) => [
+        row.getBindingContext?.()?.getPath(),
+        row
+      ])
+    );
+
+    for (const [key, contact] of Object.entries(model.oData || {})) {
+      if (
+        !key.startsWith("C_LegalTransactionExtContact(") ||
+        !contact
+      ) {
+        continue;
+      }
+
+      const type = clean(contact.LglCntntMExtCntctType).padStart(4, "0");
+      const requested = requestedByType[type];
+      if (!requested?.value) continue;
+
+      const path = `/${key.replace(/^\/+/, "")}`;
+      if (
+        populatedExternalContactPaths.has(path) &&
+        clean(model.getProperty(`${path}/LglCntntMExtCntctBP`)) ===
+          requested.value
+      ) {
+        continue;
+      }
+
+      const applied = model.setProperty(
+        `${path}/LglCntntMExtCntctBP`,
+        requested.value
+      );
+      if (!applied) continue;
+
+      const row = rowsByPath.get(path);
+      if (row) {
+        fireBoundValueChange(
+          row,
+          "LglCntntMExtCntctBP",
+          requested.value
+        );
+      }
+
+      populatedExternalContactPaths.add(path);
+      console.info(
+        "[CX F2403 POC] Contacto externo precargado",
+        {
+          path,
+          role: requested.label,
+          type,
+          value: requested.value
+        }
+      );
+    }
+
+  }
+
+  function getSmartTableRows(smartTable) {
+    if (!smartTable || typeof smartTable.getTable !== "function") {
+      return [];
+    }
+
+    const table = smartTable.getTable();
+    if (typeof table?.getItems === "function") return table.getItems();
+    if (typeof table?.getRows === "function") return table.getRows();
+    return [];
+  }
+
   function escapeODataString(value) {
     return clean(value).replace(/'/g, "''");
   }
@@ -706,7 +865,7 @@
         );
       }
 
-      if (!cxDivision) {
+      if (cxSourceType !== "CASE" && !cxDivision) {
         throw new Error(
           "CX no envió la división de la Opportunity (cxDivision)."
         );
@@ -714,14 +873,22 @@
 
       if (!cxContext) {
         throw new Error(
-          cxDivision === "10"
+          cxSourceType === "CASE"
+            ? "El tipo de caso CX no tiene un contexto S/4 válido."
+            : cxDivision === "10"
             ? "CX no envió uno de los contextos inmobiliarios válidos (20150-20153)."
             : "La división CX " + cxDivision +
               " no tiene un contexto S/4 válido para los parámetros recibidos."
         );
       }
 
-      if (!cxOpportunityId) {
+      if (cxSourceType === "CASE" && !cxCaseDisplayId) {
+        throw new Error(
+          "CX no envió el número visible del caso (cxCaseDisplayId)."
+        );
+      }
+
+      if (cxSourceType !== "CASE" && !cxOpportunityId) {
         console.warn(
           "[CX F2403 POC] CX no envió cxOpportunityId."
         );
@@ -793,11 +960,15 @@
           error
         );
       });
+      scheduleExternalContactPrefill(view, model);
       win.sap.ui.getCore().applyChanges();
 
       if (params.get("cxTitleFormat") === "v1") {
+        const sourceDisplayId = cxSourceType === "CASE"
+          ? cxCaseDisplayId
+          : cxOpportunityId;
         const title = buildContractTitle(params.get("cxCompanyInitials"), params.get("cxClientName"),
-          model.getProperty("LglCntntMContextTitle", ctx), cxOpportunityId);
+          model.getProperty("LglCntntMContextTitle", ctx), sourceDisplayId);
         model.setProperty("LegalTransactionTitle", title, ctx);
         // El título identifica la oportunidad: se mantiene íntegro durante la edición.
         for (const control of boundValueControls(view, "LegalTransactionTitle")) {
@@ -817,7 +988,11 @@
         "[CX F2403 POC] Prefill aplicado",
         {
           cxTitle,
+          cxSourceType,
           cxOpportunityId,
+          cxCaseUuid: cxCaseUuid || null,
+          cxCaseDisplayId: cxCaseDisplayId || null,
+          cxCaseType: cxCaseType || null,
           cxDivision,
           requestedContext: requestedContext || null,
           cxSalesCycle: cxSalesCycle || null,
@@ -832,7 +1007,8 @@
             client: cxClientBp || "manual",
             salesOrganization:
               cxSalesOrganization || "manual",
-            contacts: "manual"
+            primaryContact: cxPrimaryContactBp || "manual",
+            signer: cxSignerBp || "manual"
           },
           cxPep,
           LegalTransactionTitle:
@@ -904,10 +1080,10 @@ function buildContractTitle(initials, client, context, id) {
   const cleanPart = value => String(value || '').trim().replace(/\s+/g, ' ');
   const parts = [initials, client, context].map(cleanPart);
   if (parts.some(part => !part) || !/^\d+$/.test(String(id))) {
-    throw new Error('Faltan siglas de sociedad, cliente, contexto o ID de oportunidad para el título.');
+    throw new Error('Faltan siglas de sociedad, cliente, contexto o ID de referencia CX para el título.');
   }
   const suffix = `. CX${id}`;
   const title = `${parts[0]}. ${parts[1]}. CONTRATO ${parts[2]}${suffix}`;
-  if (title.length > 128) throw new Error('El título supera 128 caracteres. Debe acordarse una abreviatura de sociedad, cliente o contexto; el ID de oportunidad no se recorta.');
+  if (title.length > 128) throw new Error('El título supera 128 caracteres. Debe acordarse una abreviatura de sociedad, cliente o contexto; el ID de referencia CX no se recorta.');
   return title;
 }
