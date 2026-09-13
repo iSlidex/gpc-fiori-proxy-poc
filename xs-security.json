@@ -1,5 +1,10 @@
 {
   "xsappname": "gpc-fiori-proxy-poc",
   "tenant-mode": "dedicated",
-  "description": "POC Fiori S4 proxy with principal propagation"
+  "description": "POC Fiori S4 proxy with principal propagation",
+  "oauth2-configuration": {
+    "redirect-uris": [
+      "https://corporacion-aeroportuaria-del-este-sas-gpc-dev-buildcod18c6fdca.cfapps.us10-001.hana.ondemand.com/login/callback"
+    ]
+  }
 }
