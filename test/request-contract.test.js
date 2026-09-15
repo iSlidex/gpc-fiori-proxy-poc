@@ -81,3 +81,22 @@ test('elimina el contexto inmobiliario obsoleto y exige uno de los nuevos', asyn
   assert.match(source, /division === ["']10["']/);
   assert.match(source, /realEstateContexts\.includes\(override\)/);
 });
+
+test('detecta la creación de F2403 y notifica al contenedor', async () => {
+  const source = await readFile(sourcePath, 'utf8');
+
+  assert.match(source, /attachBatchRequestCompleted/);
+  assert.match(source, /GET_ACTIVE_LT/);
+  assert.match(source, /gpc:legal-transaction-created/);
+  assert.match(source, /legalTransactionId/);
+});
+
+test('elimina la acción nativa de crear documento desde plantilla', async () => {
+  const source = await readFile(sourcePath, 'utf8');
+
+  assert.match(source, /scheduleTemplateCreationRemoval/);
+  assert.match(source, /crear a partir de plantilla/);
+  assert.match(source, /create from template/);
+  assert.match(source, /setVisible\(false\)/);
+  assert.match(source, /MutationObserver/);
+});

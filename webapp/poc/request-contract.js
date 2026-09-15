@@ -62,6 +62,9 @@
 
   let prefillApplied = false;
   let approvalModelListenerAttached = false;
+  let creationObserverAttached = false;
+  let creationNotified = false;
+  let templateActionObserver = null;
   const populatedExternalContactPaths = new Set();
   const approvalSyncControls = new WeakSet();
   const approvalFieldPairs = Object.freeze([
@@ -94,6 +97,74 @@
     if (["true", "1", "si", "yes"].includes(text)) return true;
     if (["false", "0", "no"].includes(text)) return false;
     return null;
+  }
+
+  function scheduleTemplateCreationRemoval(win, view) {
+    const labels = new Set([
+      "crear a partir de plantilla",
+      "create from template"
+    ]);
+
+    const isTemplateAction = (value) => labels.has(normalize(value));
+    const hideUi5Action = () => {
+      const controls = typeof view?.findAggregatedObjects === "function"
+        ? view.findAggregatedObjects(true)
+        : [];
+
+      for (const control of controls) {
+        const labelsToCheck = [
+          control?.getText?.(),
+          control?.getTitle?.(),
+          control?.getTooltip_AsString?.()
+        ];
+        if (
+          labelsToCheck.some(isTemplateAction) &&
+          typeof control?.setVisible === "function"
+        ) {
+          control.setVisible(false);
+        }
+      }
+    };
+
+    const hideDomAction = () => {
+      const doc = win?.document;
+      if (!doc) return;
+
+      for (const node of doc.querySelectorAll(
+        '[role="menuitem"], .sapMMenuListItem, .sapMMenuItem'
+      )) {
+        if (!isTemplateAction(node.textContent)) continue;
+        node.hidden = true;
+        node.setAttribute("aria-hidden", "true");
+        node.style.display = "none";
+      }
+    };
+
+    const apply = () => {
+      hideUi5Action();
+      hideDomAction();
+      win?.sap?.ui?.getCore?.().applyChanges();
+    };
+
+    [0, 250, 750, 1500, 3000, 5000].forEach(
+      (delay) => window.setTimeout(apply, delay)
+    );
+
+    if (!templateActionObserver && win?.MutationObserver && win?.document) {
+      templateActionObserver = new win.MutationObserver(apply);
+      templateActionObserver.observe(win.document.documentElement, {
+        childList: true,
+        subtree: true
+      });
+      win.document.addEventListener("click", (event) => {
+        const item = event.target?.closest?.(
+          '[role="menuitem"], .sapMMenuListItem, .sapMMenuItem'
+        );
+        if (!item || !isTemplateAction(item.textContent)) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      }, true);
+    }
   }
 
   function resolveContext(
@@ -851,6 +922,89 @@
     );
   }
 
+  function attachCreationObserver(model, ctx) {
+    if (
+      creationObserverAttached ||
+      typeof model?.attachBatchRequestCompleted !== "function"
+    ) {
+      return;
+    }
+
+    creationObserverAttached = true;
+
+    const onBatchCompleted = (event) => {
+      if (creationNotified || event.getParameter?.("success") === false) {
+        return;
+      }
+
+      const requests = event.getParameter?.("requests") || [];
+      const legalTransactionId = extractCreatedLegalTransactionId(
+        requests
+      );
+
+      if (!legalTransactionId) return;
+
+      creationNotified = true;
+      if (typeof model.detachBatchRequestCompleted === "function") {
+        model.detachBatchRequestCompleted(onBatchCompleted);
+      }
+
+      const sourceDisplayId = cxSourceType === "CASE"
+        ? cxCaseDisplayId
+        : cxOpportunityId;
+      const detail = {
+        legalTransactionId,
+        sourceType: cxSourceType,
+        sourceDisplayId,
+        title: clean(
+          model.getProperty?.("LegalTransactionTitle", ctx)
+        ) || undefined
+      };
+
+      console.info(
+        "[CX F2403 POC] Transacción legal creada; notificando al monitor.",
+        detail
+      );
+      window.dispatchEvent(
+        new CustomEvent("gpc:legal-transaction-created", { detail })
+      );
+    };
+
+    model.attachBatchRequestCompleted(onBatchCompleted);
+  }
+
+  function extractCreatedLegalTransactionId(requests = []) {
+    for (const request of requests) {
+      if (request?.success === false) continue;
+
+      const statusCode = Number(
+        request?.response?.statusCode || request?.response?.status || 0
+      );
+      if (statusCode >= 400) continue;
+
+      const raw = [
+        request?.url,
+        request?.requestUri,
+        request?.response?.requestUri,
+        request?.response?.body
+      ].filter(Boolean).join(" ");
+      let decoded = raw;
+
+      try {
+        decoded = decodeURIComponent(raw);
+      } catch (_error) {
+        // Algunas versiones de UI5 entregan el URL parcialmente decodificado.
+      }
+
+      const match = decoded.match(
+        /GET_ACTIVE_LT[^\s]*[?&]LegalTransaction\s*=\s*'?([0-9]+)'?/i
+      );
+      if (match) return match[1];
+    }
+
+    return "";
+  }
+
   async function applyPrefill() {
     if (prefillApplied) {
       return;
@@ -901,6 +1055,9 @@
         model,
         ctx
       } = await waitForF2403();
+
+      attachCreationObserver(model, ctx);
+      scheduleTemplateCreationRemoval(win, view);
 
       /*
        * Título primero: basicDataValidation() consulta el título antes

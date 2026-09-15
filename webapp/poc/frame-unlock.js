@@ -181,6 +181,14 @@
     startPersistentUnlock('f2403-ready');
   });
 
+  window.addEventListener('gpc:legal-transaction-created', function (event) {
+    notifyParent(
+      'GPC_ECM_LEGAL_TRANSACTION_CREATED',
+      event.detail || {}
+    );
+    stopPersistentUnlock();
+  });
+
   iframe.addEventListener('load', function () {
     startPersistentUnlock('iframe-load');
   });
