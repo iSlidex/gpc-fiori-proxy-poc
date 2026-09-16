@@ -57,6 +57,18 @@ test('Case usa sus contextos y deja monto, moneda, producto y PEP vacíos', asyn
   assert.match(source, /ZZ1_UbicacionTecnica_LTH/);
 });
 
+test('usa el producto de Opportunity como ubicación técnica', async () => {
+  const source = await readFile(sourcePath, 'utf8');
+
+  assert.match(
+    source,
+    /const cxTechnicalLocation = clean\(params\.get\("cxTechnicalLocation"\)\) \|\|[\s\S]*cxSourceType !== "CASE" \? cxProduct : ""/
+  );
+  assert.match(source, /if \(cxTechnicalLocation\) \{/);
+  assert.match(source, /"ZZ1_UbicacionTecnica_LTH"/);
+  assert.match(source, /"opportunityProduct"/);
+});
+
 test('sincroniza monto y moneda visibles con sus campos de aprobación', async () => {
   const source = await readFile(sourcePath, 'utf8');
 

@@ -31,7 +31,8 @@
   const cxPrimaryContactBp = clean(params.get("cxPrimaryContactBp"));
   const cxSignerBp = clean(params.get("cxSignerBp"));
   const cxLegalContactBp = clean(params.get("cxLegalContactBp"));
-  const cxTechnicalLocation = clean(params.get("cxTechnicalLocation"));
+  const cxTechnicalLocation = clean(params.get("cxTechnicalLocation")) ||
+    (cxSourceType !== "CASE" ? cxProduct : "");
   const cxPep = parseOptionalBoolean(params.get("cxPep"));
 
   /*
@@ -406,7 +407,7 @@
       model.setProperty("ZZ1_PersonaespecialPEP_LTH", cxPep, ctx);
     }
 
-    if (cxSourceType === "CASE" && cxTechnicalLocation) {
+    if (cxTechnicalLocation) {
       model.setProperty(
         "ZZ1_UbicacionTecnica_LTH",
         cxTechnicalLocation,
@@ -416,6 +417,15 @@
         view,
         "ZZ1_UbicacionTecnica_LTH",
         cxTechnicalLocation
+      );
+      console.info(
+        "[CX F2403 POC] Ubicación técnica precargada",
+        {
+          source: cxSourceType === "CASE"
+            ? "caseTechnicalLocation"
+            : "opportunityProduct",
+          value: cxTechnicalLocation
+        }
       );
     }
 
