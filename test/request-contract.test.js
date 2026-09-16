@@ -29,16 +29,17 @@ test('precarga cliente y organización con claves S/4', async () => {
   assert.doesNotMatch(source, /key\.startsWith\("C_LCMEntityTypeValueHelp/);
 });
 
-test('precarga firmante y contacto principal únicamente en el flujo de Case', async () => {
+test('precarga contactos externos en Opportunity y Case', async () => {
   const source = await readFile(sourcePath, 'utf8');
 
   assert.match(source, /params\.get\("cxSourceType"\)/);
   assert.match(source, /params\.get\("cxPrimaryContactBp"\)/);
   assert.match(source, /params\.get\("cxSignerBp"\)/);
-  assert.match(source, /cxSourceType !== "CASE"/);
+  assert.match(source, /params\.get\("cxLegalContactBp"\)/);
   assert.match(source, /key\.startsWith\("C_LegalTransactionExtContact\("\)/);
   assert.match(source, /"0001"[\s\S]*"Contacto principal"/);
   assert.match(source, /"0002"[\s\S]*"Firmante"/);
+  assert.match(source, /"0003"[\s\S]*"Contacto legal"/);
   assert.match(source, /LglCntntMExtCntctBP/);
   assert.match(source, /extContactsSmartTable/);
   assert.match(source, /attachDataReceived/);

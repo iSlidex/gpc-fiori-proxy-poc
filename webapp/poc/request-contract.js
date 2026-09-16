@@ -30,6 +30,7 @@
   );
   const cxPrimaryContactBp = clean(params.get("cxPrimaryContactBp"));
   const cxSignerBp = clean(params.get("cxSignerBp"));
+  const cxLegalContactBp = clean(params.get("cxLegalContactBp"));
   const cxTechnicalLocation = clean(params.get("cxTechnicalLocation"));
   const cxPep = parseOptionalBoolean(params.get("cxPep"));
 
@@ -752,8 +753,9 @@
 
   function scheduleExternalContactPrefill(view, model) {
     if (
-      cxSourceType !== "CASE" ||
-      (!cxPrimaryContactBp && !cxSignerBp)
+      !cxPrimaryContactBp &&
+      !cxSignerBp &&
+      !cxLegalContactBp
     ) {
       return;
     }
@@ -791,6 +793,10 @@
       "0002": {
         label: "Firmante",
         value: cxSignerBp
+      },
+      "0003": {
+        label: "Contacto legal",
+        value: cxLegalContactBp
       }
     };
 
@@ -1165,7 +1171,8 @@
             salesOrganization:
               cxSalesOrganization || "manual",
             primaryContact: cxPrimaryContactBp || "manual",
-            signer: cxSignerBp || "manual"
+            signer: cxSignerBp || "manual",
+            legalContact: cxLegalContactBp || "manual"
           },
           cxPep,
           LegalTransactionTitle:
