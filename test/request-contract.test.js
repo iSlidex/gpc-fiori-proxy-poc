@@ -26,6 +26,12 @@ test('precarga cliente y organización con claves S/4', async () => {
   assert.match(source, /C_LCMSalesOrganizationVH/);
   assert.match(source, /`\$\{rowPath\}\/LglCntntMEntityName`/);
   assert.match(source, /validateEntityWhenControlIsReady/);
+  assert.match(source, /scheduleEntityPrefill/);
+  assert.match(source, /attachRequestCompleted/);
+  assert.match(source, /attachDataReceived/);
+  assert.match(source, /model-request-completed/);
+  assert.match(source, /table-data-received/);
+  assert.match(source, /El ID es el dato funcional/);
   assert.doesNotMatch(source, /key\.startsWith\("C_LCMEntityTypeValueHelp/);
 });
 

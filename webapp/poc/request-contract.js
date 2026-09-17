@@ -67,6 +67,10 @@
   let creationObserverAttached = false;
   let creationNotified = false;
   let templateActionObserver = null;
+  let entityModelListenerAttached = false;
+  let entityPrefillInFlight = false;
+  const entityPrefillTables = new WeakSet();
+  const populatedEntityPaths = new Set();
   const populatedExternalContactPaths = new Set();
   const approvalSyncControls = new WeakSet();
   const approvalFieldPairs = Object.freeze([
@@ -643,8 +647,69 @@
     }
   }
 
-  async function applyEntityPrefill(view, model) {
-    let pendingEntities = [
+  function scheduleEntityPrefill(view, model) {
+    if (!cxClientBp && !cxSalesOrganization) return;
+
+    const apply = async (reason) => {
+      if (entityPrefillInFlight) return;
+      entityPrefillInFlight = true;
+      try {
+        await applyEntityPrefill(view, model, reason);
+      } catch (error) {
+        console.warn(
+          "[CX F2403 POC] Falló el prefill asíncrono de Entidades.",
+          { reason, error }
+        );
+      } finally {
+        entityPrefillInFlight = false;
+      }
+    };
+
+    const attachTableListeners = () => {
+      const controls = typeof view?.findAggregatedObjects === "function"
+        ? view.findAggregatedObjects(true)
+        : [];
+
+      for (const control of controls) {
+        if (
+          !control ||
+          entityPrefillTables.has(control) ||
+          typeof control.getTable !== "function" ||
+          typeof control.attachDataReceived !== "function"
+        ) {
+          continue;
+        }
+
+        control.attachDataReceived(() => apply("table-data-received"));
+        entityPrefillTables.add(control);
+      }
+    };
+
+    if (
+      !entityModelListenerAttached &&
+      typeof model.attachRequestCompleted === "function"
+    ) {
+      model.attachRequestCompleted(() => {
+        attachTableListeners();
+        apply("model-request-completed");
+      });
+      entityModelListenerAttached = true;
+    }
+
+    /*
+     * F2403 crea las filas de Entidades al materializar el paso Partes.
+     * Los listeners cubren ese momento aunque ocurra mucho después de abrir
+     * el formulario; los reintentos cubren filas ya presentes en el cache.
+     */
+    [0, 250, 750, 1500, 3000, 5000, 8000, 12000, 20000, 30000, 60000]
+      .forEach((delay) => window.setTimeout(() => {
+        attachTableListeners();
+        apply(`retry-${delay}`);
+      }, delay));
+  }
+
+  async function applyEntityPrefill(view, model, reason) {
+    const requestedEntities = [
       {
         type: "0002",
         label: "Cliente",
@@ -667,98 +732,88 @@
       }
     ].filter((entity) => entity.value);
 
-    if (!pendingEntities.length) return;
+    if (!requestedEntities.length) return;
 
     /*
      * Las entidades de Partes son registros transitorios separados de la
      * cabecera. Después de GET_STEP_SEQUENCE aparecen directamente en el
-     * cache OData como C_LegalTransactionEntity(...), incluso antes de que
-     * UI5 materialice los controles del paso Partes.
+     * cache OData como C_LegalTransactionEntity(...). Según el contexto,
+     * pueden aparecer recién cuando el usuario entra al paso Partes.
      */
-    for (let attempt = 0; attempt < 40; attempt++) {
-      const entityRows = Object.entries(model.oData || {}).filter(
-        ([key, row]) =>
-          key.startsWith("C_LegalTransactionEntity(") &&
-          row &&
-          row.LglCntntMEntityType
+    const entityRows = Object.entries(model.oData || {}).filter(
+      ([key, row]) =>
+        key.startsWith("C_LegalTransactionEntity(") &&
+        row &&
+        row.LglCntntMEntityType
+    );
+
+    for (const requested of requestedEntities) {
+      const match = entityRows.find(([, row]) =>
+        clean(row.LglCntntMEntityType).padStart(4, "0") ===
+          requested.type
       );
-      const nextPending = [];
+      if (!match) continue;
 
-      for (const requested of pendingEntities) {
-        const match = entityRows.find(([, row]) =>
-          clean(row.LglCntntMEntityType).padStart(4, "0") ===
-            requested.type
+      const rowPath = `/${match[0].replace(/^\/+/, "")}`;
+      const currentValue = clean(
+        model.getProperty(`${rowPath}/${requested.property}`)
+      );
+
+      if (
+        populatedEntityPaths.has(rowPath) &&
+        currentValue === requested.value
+      ) {
+        continue;
+      }
+
+      /*
+       * El ID es el dato funcional y no debe depender de que el value help
+       * responda. El nombre descriptivo se completa después, si está
+       * disponible, sin bloquear Cliente u Organización de ventas.
+       */
+      const applied = model.setProperty(
+        `${rowPath}/${requested.property}`,
+        requested.value
+      );
+      if (applied === false) continue;
+
+      populatedEntityPaths.add(rowPath);
+
+      if (requested.fallbackName) {
+        model.setProperty(
+          `${rowPath}/LglCntntMEntityName`,
+          requested.fallbackName
         );
+      }
 
-        if (!match) {
-          nextPending.push(requested);
-          continue;
-        }
+      validateEntityWhenControlIsReady(view, rowPath, requested);
 
-        const rowPath = `/${match[0].replace(/^\/+/, "")}`;
-        let valueHelp = {};
-
-        try {
-          valueHelp = await readODataEntity(
-            model,
-            requested.valueHelpPath
-          );
-        } catch (error) {
-          if (!requested.fallbackName) {
-            console.warn(
-              `[CX F2403 POC] No fue posible resolver ${requested.label} en su value help.`,
-              { path: requested.valueHelpPath, error }
-            );
-            nextPending.push(requested);
-            continue;
-          }
-        }
-
+      try {
+        const valueHelp = await readODataEntity(
+          model,
+          requested.valueHelpPath
+        );
         const entityName = clean(
           valueHelp?.[requested.nameProperty]
         ) || requested.fallbackName;
-        const applied =
-          model.setProperty(
-            `${rowPath}/${requested.property}`,
-            requested.value
-          ) &&
+        if (entityName) {
           model.setProperty(
             `${rowPath}/LglCntntMEntityName`,
             entityName
           );
-
-        if (!applied) {
-          nextPending.push(requested);
-          continue;
         }
-
-        validateEntityWhenControlIsReady(
-          view,
-          rowPath,
-          requested
+      } catch (error) {
+        console.warn(
+          `[CX F2403 POC] ${requested.label} fue precargado por ID, pero no fue posible resolver su nombre en el value help.`,
+          { path: requested.valueHelpPath, error }
         );
       }
 
-      pendingEntities = nextPending;
-
-      if (!pendingEntities.length) {
-        console.info("[CX F2403 POC] Entidades precargadas", {
-          client: cxClientBp || null,
-          salesOrganization: cxSalesOrganization || null
-        });
-        return;
-      }
-
-      await sleep(250);
+      console.info(
+        `[CX F2403 POC] ${requested.label} precargado`,
+        { reason, rowPath, value: requested.value }
+      );
     }
-
-    console.warn(
-      "[CX F2403 POC] No se encontraron a tiempo las filas de Partes para completar el prefill.",
-      {
-        client: cxClientBp || null,
-        salesOrganization: cxSalesOrganization || null
-      }
-    );
   }
 
   function scheduleExternalContactPrefill(view, model) {
@@ -1127,12 +1182,7 @@
        * materialice. El retry continúa en segundo plano mientras el usuario
        * revisa los primeros pasos.
        */
-      applyEntityPrefill(view, model).catch((error) => {
-        console.warn(
-          "[CX F2403 POC] Falló el prefill asíncrono de Partes.",
-          error
-        );
-      });
+      scheduleEntityPrefill(view, model);
       scheduleExternalContactPrefill(view, model);
       win.sap.ui.getCore().applyChanges();
 
