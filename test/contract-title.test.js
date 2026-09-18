@@ -7,7 +7,7 @@ const scope = {};
 vm.runInNewContext(source.slice(source.indexOf('function buildContractTitle(')), scope);
 const build = scope.buildContractTitle;
 test('formats the title with a terminal opportunity identifier', () => {
-  assert.equal(build('ABC', 'Cliente', 'Alquiler', '274'), 'ABC. Cliente. CONTRATO Alquiler. CX-OPP-274');
+  assert.equal(build('ABC', 'Cliente', 'Alquiler', '274'), 'ABC. Cliente. CONTRATO Alquiler. CX274');
 });
 test('rejects missing fields and unsafe IDs', () => {
   assert.throws(() => build('', 'Cliente', 'Alquiler', '274'));

@@ -15,6 +15,14 @@
   const cxCurrency = clean(params.get("cxCurrency"));
   const cxAmountSource = clean(params.get("cxAmountSource"));
   const cxProduct = clean(params.get("cxProduct"));
+  const cxClientBp = clean(params.get("cxClientBp"));
+  const cxClientName = clean(params.get("cxClientName"));
+  const cxSalesOrganization = clean(
+    params.get("cxSalesOrganization")
+  );
+  const cxSalesOrganizationName = clean(
+    params.get("cxSalesOrganizationName")
+  );
   const cxPep = parseOptionalBoolean(params.get("cxPep"));
 
   /*
@@ -25,7 +33,6 @@
    * El ID histórico 20012 no se usa porque F2403 no logra inicializarlo.
    */
   const contextByDivision = Object.freeze({
-    "10": "20098",
     "11": "20096",
     "60": "20107",
     "70": "20125"
@@ -82,6 +89,20 @@
     salesCycle,
     salesCycleDescription
   ) {
+    if (division === "10") {
+      const realEstateContexts = ["20150", "20151", "20152", "20153"];
+      if (realEstateContexts.includes(override)) {
+        return override;
+      }
+      if (override) {
+        console.error(
+          "[CX F2403 POC] Contexto inmobiliario no permitido.",
+          { division, override }
+        );
+      }
+      return "";
+    }
+
     if (division === "70") {
       if (isTenderSalesCycle(salesCycle, salesCycleDescription)) {
         return "20099";
@@ -371,7 +392,9 @@
         if (part?.path) paths.push(part.path);
       }
 
-      return paths.includes(property);
+      return paths.some((path) =>
+        clean(path).split("/").filter(Boolean).pop() === property
+      );
     });
   }
 
@@ -491,6 +514,184 @@
     }
   }
 
+  async function applyEntityPrefill(view, model) {
+    let pendingEntities = [
+      {
+        type: "0002",
+        label: "Cliente",
+        value: cxClientBp,
+        property: "LglCntntMEntityCustomer",
+        nameProperty: "BusinessPartnerName",
+        fallbackName: cxClientName,
+        valueHelpPath:
+          `/C_LCMContactsOfCustomerVH(Customer='${escapeODataString(cxClientBp)}',CompanyCode='${escapeODataString(cxSalesOrganization)}')`
+      },
+      {
+        type: "0004",
+        label: "Organización de ventas",
+        value: cxSalesOrganization,
+        property: "LglCntntMEntitySlsOrg",
+        nameProperty: "SalesOrganization_Text",
+        fallbackName: cxSalesOrganizationName,
+        valueHelpPath:
+          `/C_LCMSalesOrganizationVH('${escapeODataString(cxSalesOrganization)}')`
+      }
+    ].filter((entity) => entity.value);
+
+    if (!pendingEntities.length) return;
+
+    /*
+     * Las entidades de Partes son registros transitorios separados de la
+     * cabecera. Después de GET_STEP_SEQUENCE aparecen directamente en el
+     * cache OData como C_LegalTransactionEntity(...), incluso antes de que
+     * UI5 materialice los controles del paso Partes.
+     */
+    for (let attempt = 0; attempt < 40; attempt++) {
+      const entityRows = Object.entries(model.oData || {}).filter(
+        ([key, row]) =>
+          key.startsWith("C_LegalTransactionEntity(") &&
+          row &&
+          row.LglCntntMEntityType
+      );
+      const nextPending = [];
+
+      for (const requested of pendingEntities) {
+        const match = entityRows.find(([, row]) =>
+          clean(row.LglCntntMEntityType).padStart(4, "0") ===
+            requested.type
+        );
+
+        if (!match) {
+          nextPending.push(requested);
+          continue;
+        }
+
+        const rowPath = `/${match[0].replace(/^\/+/, "")}`;
+        let valueHelp = {};
+
+        try {
+          valueHelp = await readODataEntity(
+            model,
+            requested.valueHelpPath
+          );
+        } catch (error) {
+          if (!requested.fallbackName) {
+            console.warn(
+              `[CX F2403 POC] No fue posible resolver ${requested.label} en su value help.`,
+              { path: requested.valueHelpPath, error }
+            );
+            nextPending.push(requested);
+            continue;
+          }
+        }
+
+        const entityName = clean(
+          valueHelp?.[requested.nameProperty]
+        ) || requested.fallbackName;
+        const applied =
+          model.setProperty(
+            `${rowPath}/${requested.property}`,
+            requested.value
+          ) &&
+          model.setProperty(
+            `${rowPath}/LglCntntMEntityName`,
+            entityName
+          );
+
+        if (!applied) {
+          nextPending.push(requested);
+          continue;
+        }
+
+        validateEntityWhenControlIsReady(
+          view,
+          rowPath,
+          requested
+        );
+      }
+
+      pendingEntities = nextPending;
+
+      if (!pendingEntities.length) {
+        console.info("[CX F2403 POC] Entidades precargadas", {
+          client: cxClientBp || null,
+          salesOrganization: cxSalesOrganization || null
+        });
+        return;
+      }
+
+      await sleep(250);
+    }
+
+    console.warn(
+      "[CX F2403 POC] No se encontraron a tiempo las filas de Partes para completar el prefill.",
+      {
+        client: cxClientBp || null,
+        salesOrganization: cxSalesOrganization || null
+      }
+    );
+  }
+
+  function escapeODataString(value) {
+    return clean(value).replace(/'/g, "''");
+  }
+
+  function readODataEntity(model, path) {
+    return new Promise((resolve, reject) => {
+      model.read(path, {
+        success: resolve,
+        error: reject
+      });
+    });
+  }
+
+  async function validateEntityWhenControlIsReady(
+    view,
+    rowPath,
+    requested
+  ) {
+    for (let attempt = 0; attempt < 40; attempt++) {
+      const control = boundValueControls(
+        view,
+        requested.property
+      ).find((candidate) =>
+        candidate.getBindingContext?.()?.getPath() === rowPath
+      );
+
+      if (!control) {
+        await sleep(250);
+        continue;
+      }
+
+      try {
+        if (typeof control.fireChangeModelValue === "function") {
+          control.fireChangeModelValue();
+        } else if (typeof control.fireChange === "function") {
+          control.fireChange({
+            value: requested.value,
+            newValue: requested.value
+          });
+        } else if (typeof control.fireEvent === "function") {
+          control.fireEvent("change", {
+            value: requested.value,
+            newValue: requested.value
+          });
+        }
+      } catch (error) {
+        console.warn(
+          `[CX F2403 POC] ${requested.label} se escribió, pero no se pudo disparar su validación.`,
+          error
+        );
+      }
+      return;
+    }
+
+    console.warn(
+      `[CX F2403 POC] ${requested.label} fue escrito en el modelo; su control aún no estaba disponible para disparar la validación.`,
+      { rowPath, value: requested.value }
+    );
+  }
+
   async function applyPrefill() {
     if (prefillApplied) {
       return;
@@ -513,9 +714,10 @@
 
       if (!cxContext) {
         throw new Error(
-          "La división CX " +
-          cxDivision +
-          " no tiene un contexto S/4 válido para los parámetros recibidos."
+          cxDivision === "10"
+            ? "CX no envió uno de los contextos inmobiliarios válidos (20150-20153)."
+            : "La división CX " + cxDivision +
+              " no tiene un contexto S/4 válido para los parámetros recibidos."
         );
       }
 
@@ -580,6 +782,17 @@
        */
       scheduleApprovalFieldSync(view, model, ctx);
       applyExtendedHeaderPrefill(view, model, ctx);
+      /*
+       * La vista no debe quedar oculta esperando a que el paso Partes se
+       * materialice. El retry continúa en segundo plano mientras el usuario
+       * revisa los primeros pasos.
+       */
+      applyEntityPrefill(view, model).catch((error) => {
+        console.warn(
+          "[CX F2403 POC] Falló el prefill asíncrono de Partes.",
+          error
+        );
+      });
       win.sap.ui.getCore().applyChanges();
 
       if (params.get("cxTitleFormat") === "v1") {
@@ -615,7 +828,12 @@
           cxAmountSource: cxAmountSource || null,
           cxCurrency: cxCurrency || null,
           cxProduct: cxProduct || null,
-          parties: "manual",
+          parties: {
+            client: cxClientBp || "manual",
+            salesOrganization:
+              cxSalesOrganization || "manual",
+            contacts: "manual"
+          },
           cxPep,
           LegalTransactionTitle:
             result.LegalTransactionTitle,
@@ -688,7 +906,7 @@ function buildContractTitle(initials, client, context, id) {
   if (parts.some(part => !part) || !/^\d+$/.test(String(id))) {
     throw new Error('Faltan siglas de sociedad, cliente, contexto o ID de oportunidad para el título.');
   }
-  const suffix = `. CX-OPP-${id}`;
+  const suffix = `. CX${id}`;
   const title = `${parts[0]}. ${parts[1]}. CONTRATO ${parts[2]}${suffix}`;
   if (title.length > 128) throw new Error('El título supera 128 caracteres. Debe acordarse una abreviatura de sociedad, cliente o contexto; el ID de oportunidad no se recorta.');
   return title;

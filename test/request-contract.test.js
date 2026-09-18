@@ -11,23 +11,25 @@ const sourcePath = path.join(
   'request-contract.js'
 );
 
-test('mantiene los participantes fuera del prefill automático', async () => {
+test('precarga cliente y organización con claves S/4 y deja contactos manuales', async () => {
   const source = await readFile(sourcePath, 'utf8');
 
-  for (const parameter of [
-    'cxClientBp',
-    'cxClientType',
-    'cxPrimaryContactBp',
-    'cxSignerBp'
-  ]) {
-    assert.equal(
-      source.includes(parameter),
-      false,
-      `${parameter} no debe ser leído ni escrito por el proxy`
-    );
-  }
-
-  assert.match(source, /parties:\s*"manual"/);
+  assert.match(source, /params\.get\("cxClientBp"\)/);
+  assert.match(source, /params\.get\("cxSalesOrganization"\)/);
+  assert.match(source, /params\.get\("cxSalesOrganizationName"\)/);
+  assert.match(source, /type:\s*"0002"[\s\S]*label:\s*"Cliente"/);
+  assert.match(source, /type:\s*"0004"[\s\S]*label:\s*"Organización de ventas"/);
+  assert.match(source, /key\.startsWith\("C_LegalTransactionEntity\("\)/);
+  assert.match(source, /property:\s*"LglCntntMEntityCustomer"/);
+  assert.match(source, /property:\s*"LglCntntMEntitySlsOrg"/);
+  assert.match(source, /C_LCMContactsOfCustomerVH/);
+  assert.match(source, /C_LCMSalesOrganizationVH/);
+  assert.match(source, /`\$\{rowPath\}\/LglCntntMEntityName`/);
+  assert.match(source, /validateEntityWhenControlIsReady/);
+  assert.doesNotMatch(source, /key\.startsWith\("C_LCMEntityTypeValueHelp/);
+  assert.match(source, /contacts:\s*"manual"/);
+  assert.doesNotMatch(source, /cxPrimaryContactBp/);
+  assert.doesNotMatch(source, /cxSignerBp/);
 });
 
 test('sincroniza monto y moneda visibles con sus campos de aprobación', async () => {
@@ -44,4 +46,14 @@ test('sincroniza monto y moneda visibles con sus campos de aprobación', async (
   assert.match(source, /attachPropertyChange/);
   assert.match(source, /attachChange/);
   assert.match(source, /syncApprovalFields/);
+});
+
+test('elimina el contexto inmobiliario obsoleto y exige uno de los nuevos', async () => {
+  const source = await readFile(sourcePath, 'utf8');
+  assert.doesNotMatch(source, /["']10["']\s*:\s*["']20098["']/);
+  for (const id of ['20150', '20151', '20152', '20153']) {
+    assert.match(source, new RegExp(`["']${id}["']`));
+  }
+  assert.match(source, /division === ["']10["']/);
+  assert.match(source, /realEstateContexts\.includes\(override\)/);
 });
