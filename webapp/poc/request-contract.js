@@ -4,7 +4,12 @@
   const params = new URLSearchParams(window.location.search);
 
   const cxTitle = clean(params.get("cxTitle"));
+  const cxSourceType = clean(params.get("cxSourceType")).toUpperCase() ||
+    "OPPORTUNITY";
   const cxOpportunityId = clean(params.get("cxOpportunityId"));
+  const cxCaseUuid = clean(params.get("cxCaseUuid"));
+  const cxCaseDisplayId = clean(params.get("cxCaseDisplayId"));
+  const cxCaseType = clean(params.get("cxCaseType")).toUpperCase();
   const cxDivision = clean(params.get("cxDivision"));
   const requestedContext = clean(params.get("cxContext"));
   const cxSalesCycle = clean(params.get("cxSalesCycle"));
@@ -23,6 +28,11 @@
   const cxSalesOrganizationName = clean(
     params.get("cxSalesOrganizationName")
   );
+  const cxPrimaryContactBp = clean(params.get("cxPrimaryContactBp"));
+  const cxSignerBp = clean(params.get("cxSignerBp"));
+  const cxLegalContactBp = clean(params.get("cxLegalContactBp"));
+  const cxTechnicalLocation = clean(params.get("cxTechnicalLocation")) ||
+    (cxSourceType !== "CASE" ? cxProduct : "");
   const cxPep = parseOptionalBoolean(params.get("cxPep"));
 
   /*
@@ -37,6 +47,10 @@
     "60": "20107",
     "70": "20125"
   });
+  const contextByCaseType = Object.freeze({
+    Z001: "20141",
+    Z006: "20142"
+  });
 
   const cxContext = resolveContext(
     cxDivision,
@@ -50,6 +64,14 @@
 
   let prefillApplied = false;
   let approvalModelListenerAttached = false;
+  let creationObserverAttached = false;
+  let creationNotified = false;
+  let templateActionObserver = null;
+  let entityModelListenerAttached = false;
+  let entityPrefillInFlight = false;
+  const entityPrefillTables = new WeakSet();
+  const populatedEntityPaths = new Set();
+  const populatedExternalContactPaths = new Set();
   const approvalSyncControls = new WeakSet();
   const approvalFieldPairs = Object.freeze([
     {
@@ -83,12 +105,98 @@
     return null;
   }
 
+  function scheduleTemplateCreationRemoval(win, view) {
+    const labels = new Set([
+      "crear a partir de plantilla",
+      "create from template"
+    ]);
+
+    const isTemplateAction = (value) => labels.has(normalize(value));
+    const hideUi5Action = () => {
+      const controls = typeof view?.findAggregatedObjects === "function"
+        ? view.findAggregatedObjects(true)
+        : [];
+
+      for (const control of controls) {
+        const labelsToCheck = [
+          control?.getText?.(),
+          control?.getTitle?.(),
+          control?.getTooltip_AsString?.()
+        ];
+        if (
+          labelsToCheck.some(isTemplateAction) &&
+          typeof control?.setVisible === "function"
+        ) {
+          control.setVisible(false);
+        }
+      }
+    };
+
+    const hideDomAction = () => {
+      const doc = win?.document;
+      if (!doc) return;
+
+      for (const node of doc.querySelectorAll(
+        '[role="menuitem"], .sapMMenuListItem, .sapMMenuItem'
+      )) {
+        if (!isTemplateAction(node.textContent)) continue;
+        node.hidden = true;
+        node.setAttribute("aria-hidden", "true");
+        node.style.display = "none";
+      }
+    };
+
+    const apply = () => {
+      hideUi5Action();
+      hideDomAction();
+      win?.sap?.ui?.getCore?.().applyChanges();
+    };
+
+    [0, 250, 750, 1500, 3000, 5000].forEach(
+      (delay) => window.setTimeout(apply, delay)
+    );
+
+    if (!templateActionObserver && win?.MutationObserver && win?.document) {
+      templateActionObserver = new win.MutationObserver(apply);
+      templateActionObserver.observe(win.document.documentElement, {
+        childList: true,
+        subtree: true
+      });
+      win.document.addEventListener("click", (event) => {
+        const item = event.target?.closest?.(
+          '[role="menuitem"], .sapMMenuListItem, .sapMMenuItem'
+        );
+        if (!item || !isTemplateAction(item.textContent)) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      }, true);
+    }
+  }
+
   function resolveContext(
     division,
     override,
     salesCycle,
     salesCycleDescription
   ) {
+    if (cxSourceType === "CASE") {
+      const expectedContext = contextByCaseType[cxCaseType];
+      if (!expectedContext) {
+        console.error(
+          "[CX F2403 POC] Tipo de caso no habilitado.",
+          { caseType: cxCaseType || null, supportedCaseTypes: ["Z001", "Z006"] }
+        );
+        return "";
+      }
+      if (!override || override === expectedContext) return expectedContext;
+
+      console.error(
+        "[CX F2403 POC] El contexto no corresponde al tipo de caso.",
+        { caseType: cxCaseType, override, expectedContext }
+      );
+      return "";
+    }
+
     if (division === "10") {
       const realEstateContexts = ["20150", "20151", "20152", "20153"];
       if (realEstateContexts.includes(override)) {
@@ -271,19 +379,19 @@
      * a los controles visibles; el par MontoAprobacin conserva los
      * valores técnicos que viajan en la entidad transitoria.
      */
-    if (cxAmount) {
+    if (cxSourceType !== "CASE" && cxAmount) {
       model.setProperty("ZZ1_MontoAprobacin_LTH", cxAmount, ctx);
       model.setProperty("ZZ1_MONTO_LTH", cxAmount, ctx);
       fireBoundValueChange(view, "ZZ1_MONTO_LTH", cxAmount);
     }
 
-    if (cxCurrency) {
+    if (cxSourceType !== "CASE" && cxCurrency) {
       model.setProperty("ZZ1_MontoAprobacin_LTHC", cxCurrency, ctx);
       model.setProperty("ZZ1_MonedaMonto_LTH", cxCurrency, ctx);
       fireBoundValueChange(view, "ZZ1_MonedaMonto_LTH", cxCurrency);
     }
 
-    if (cxAmount || cxCurrency) {
+    if (cxSourceType !== "CASE" && (cxAmount || cxCurrency)) {
       console.info(
         "[CX F2403 POC] Monto y moneda precargados",
         {
@@ -299,11 +407,33 @@
       );
     }
 
-    if (cxPep !== null) {
+    if (cxSourceType !== "CASE" && cxPep !== null) {
       model.setProperty("ZZ1_PersonaespecialPEP_LTH", cxPep, ctx);
     }
 
-    if (cxProduct) {
+    if (cxTechnicalLocation) {
+      model.setProperty(
+        "ZZ1_UbicacionTecnica_LTH",
+        cxTechnicalLocation,
+        ctx
+      );
+      fireBoundValueChange(
+        view,
+        "ZZ1_UbicacionTecnica_LTH",
+        cxTechnicalLocation
+      );
+      console.info(
+        "[CX F2403 POC] Ubicación técnica precargada",
+        {
+          source: cxSourceType === "CASE"
+            ? "caseTechnicalLocation"
+            : "opportunityProduct",
+          value: cxTechnicalLocation
+        }
+      );
+    }
+
+    if (cxSourceType !== "CASE" && cxProduct) {
       const productProperty = findProductProperty(model, ctx);
       if (productProperty) {
         model.setProperty(productProperty, cxProduct, ctx);
@@ -319,7 +449,10 @@
       }
     }
 
-    if (cxAmountSource === "opportunityFallback") {
+    if (
+      cxSourceType !== "CASE" &&
+      cxAmountSource === "opportunityFallback"
+    ) {
       console.warn(
         "[CX F2403 POC] Monto precargado desde Opportunity como fallback. Funcionalmente el origen definitivo debe ser la cotización aprobada."
       );
@@ -514,8 +647,69 @@
     }
   }
 
-  async function applyEntityPrefill(view, model) {
-    let pendingEntities = [
+  function scheduleEntityPrefill(view, model) {
+    if (!cxClientBp && !cxSalesOrganization) return;
+
+    const apply = async (reason) => {
+      if (entityPrefillInFlight) return;
+      entityPrefillInFlight = true;
+      try {
+        await applyEntityPrefill(view, model, reason);
+      } catch (error) {
+        console.warn(
+          "[CX F2403 POC] Falló el prefill asíncrono de Entidades.",
+          { reason, error }
+        );
+      } finally {
+        entityPrefillInFlight = false;
+      }
+    };
+
+    const attachTableListeners = () => {
+      const controls = typeof view?.findAggregatedObjects === "function"
+        ? view.findAggregatedObjects(true)
+        : [];
+
+      for (const control of controls) {
+        if (
+          !control ||
+          entityPrefillTables.has(control) ||
+          typeof control.getTable !== "function" ||
+          typeof control.attachDataReceived !== "function"
+        ) {
+          continue;
+        }
+
+        control.attachDataReceived(() => apply("table-data-received"));
+        entityPrefillTables.add(control);
+      }
+    };
+
+    if (
+      !entityModelListenerAttached &&
+      typeof model.attachRequestCompleted === "function"
+    ) {
+      model.attachRequestCompleted(() => {
+        attachTableListeners();
+        apply("model-request-completed");
+      });
+      entityModelListenerAttached = true;
+    }
+
+    /*
+     * F2403 crea las filas de Entidades al materializar el paso Partes.
+     * Los listeners cubren ese momento aunque ocurra mucho después de abrir
+     * el formulario; los reintentos cubren filas ya presentes en el cache.
+     */
+    [0, 250, 750, 1500, 3000, 5000, 8000, 12000, 20000, 30000, 60000]
+      .forEach((delay) => window.setTimeout(() => {
+        attachTableListeners();
+        apply(`retry-${delay}`);
+      }, delay));
+  }
+
+  async function applyEntityPrefill(view, model, reason) {
+    const requestedEntities = [
       {
         type: "0002",
         label: "Cliente",
@@ -538,98 +732,205 @@
       }
     ].filter((entity) => entity.value);
 
-    if (!pendingEntities.length) return;
+    if (!requestedEntities.length) return;
 
     /*
      * Las entidades de Partes son registros transitorios separados de la
      * cabecera. Después de GET_STEP_SEQUENCE aparecen directamente en el
-     * cache OData como C_LegalTransactionEntity(...), incluso antes de que
-     * UI5 materialice los controles del paso Partes.
+     * cache OData como C_LegalTransactionEntity(...). Según el contexto,
+     * pueden aparecer recién cuando el usuario entra al paso Partes.
      */
-    for (let attempt = 0; attempt < 40; attempt++) {
-      const entityRows = Object.entries(model.oData || {}).filter(
-        ([key, row]) =>
-          key.startsWith("C_LegalTransactionEntity(") &&
-          row &&
-          row.LglCntntMEntityType
+    const entityRows = Object.entries(model.oData || {}).filter(
+      ([key, row]) =>
+        key.startsWith("C_LegalTransactionEntity(") &&
+        row &&
+        row.LglCntntMEntityType
+    );
+
+    for (const requested of requestedEntities) {
+      const match = entityRows.find(([, row]) =>
+        clean(row.LglCntntMEntityType).padStart(4, "0") ===
+          requested.type
       );
-      const nextPending = [];
+      if (!match) continue;
 
-      for (const requested of pendingEntities) {
-        const match = entityRows.find(([, row]) =>
-          clean(row.LglCntntMEntityType).padStart(4, "0") ===
-            requested.type
+      const rowPath = `/${match[0].replace(/^\/+/, "")}`;
+      const currentValue = clean(
+        model.getProperty(`${rowPath}/${requested.property}`)
+      );
+
+      if (
+        populatedEntityPaths.has(rowPath) &&
+        currentValue === requested.value
+      ) {
+        continue;
+      }
+
+      /*
+       * El ID es el dato funcional y no debe depender de que el value help
+       * responda. El nombre descriptivo se completa después, si está
+       * disponible, sin bloquear Cliente u Organización de ventas.
+       */
+      const applied = model.setProperty(
+        `${rowPath}/${requested.property}`,
+        requested.value
+      );
+      if (applied === false) continue;
+
+      populatedEntityPaths.add(rowPath);
+
+      if (requested.fallbackName) {
+        model.setProperty(
+          `${rowPath}/LglCntntMEntityName`,
+          requested.fallbackName
         );
+      }
 
-        if (!match) {
-          nextPending.push(requested);
-          continue;
-        }
+      validateEntityWhenControlIsReady(view, rowPath, requested);
 
-        const rowPath = `/${match[0].replace(/^\/+/, "")}`;
-        let valueHelp = {};
-
-        try {
-          valueHelp = await readODataEntity(
-            model,
-            requested.valueHelpPath
-          );
-        } catch (error) {
-          if (!requested.fallbackName) {
-            console.warn(
-              `[CX F2403 POC] No fue posible resolver ${requested.label} en su value help.`,
-              { path: requested.valueHelpPath, error }
-            );
-            nextPending.push(requested);
-            continue;
-          }
-        }
-
+      try {
+        const valueHelp = await readODataEntity(
+          model,
+          requested.valueHelpPath
+        );
         const entityName = clean(
           valueHelp?.[requested.nameProperty]
         ) || requested.fallbackName;
-        const applied =
-          model.setProperty(
-            `${rowPath}/${requested.property}`,
-            requested.value
-          ) &&
+        if (entityName) {
           model.setProperty(
             `${rowPath}/LglCntntMEntityName`,
             entityName
           );
-
-        if (!applied) {
-          nextPending.push(requested);
-          continue;
         }
-
-        validateEntityWhenControlIsReady(
-          view,
-          rowPath,
-          requested
+      } catch (error) {
+        console.warn(
+          `[CX F2403 POC] ${requested.label} fue precargado por ID, pero no fue posible resolver su nombre en el value help.`,
+          { path: requested.valueHelpPath, error }
         );
       }
 
-      pendingEntities = nextPending;
+      console.info(
+        `[CX F2403 POC] ${requested.label} precargado`,
+        { reason, rowPath, value: requested.value }
+      );
+    }
+  }
 
-      if (!pendingEntities.length) {
-        console.info("[CX F2403 POC] Entidades precargadas", {
-          client: cxClientBp || null,
-          salesOrganization: cxSalesOrganization || null
-        });
-        return;
-      }
-
-      await sleep(250);
+  function scheduleExternalContactPrefill(view, model) {
+    if (
+      !cxPrimaryContactBp &&
+      !cxSignerBp &&
+      !cxLegalContactBp
+    ) {
+      return;
     }
 
-    console.warn(
-      "[CX F2403 POC] No se encontraron a tiempo las filas de Partes para completar el prefill.",
-      {
-        client: cxClientBp || null,
-        salesOrganization: cxSalesOrganization || null
-      }
+    const smartTable = view.byId("extContactsSmartTable");
+    const apply = () => applyExternalContactPrefill(
+      view,
+      model,
+      smartTable
     );
+
+    if (
+      smartTable &&
+      typeof smartTable.attachDataReceived === "function"
+    ) {
+      smartTable.attachDataReceived(apply);
+    }
+
+    /*
+     * Las filas de contactos externos se materializan al entrar al paso
+     * Partes. dataReceived cubre ese momento; los reintentos cubren los
+     * casos en que F2403 ya cargó las filas antes de enlazar el listener.
+     */
+    [0, 250, 750, 1500, 3000, 5000, 8000, 12000, 20000].forEach(
+      (delay) => window.setTimeout(apply, delay)
+    );
+  }
+
+  function applyExternalContactPrefill(view, model, smartTable) {
+    const requestedByType = {
+      "0001": {
+        label: "Contacto principal",
+        value: cxPrimaryContactBp
+      },
+      "0002": {
+        label: "Firmante",
+        value: cxSignerBp
+      },
+      "0003": {
+        label: "Contacto legal",
+        value: cxLegalContactBp
+      }
+    };
+
+    const rowsByPath = new Map(
+      getSmartTableRows(smartTable).map((row) => [
+        row.getBindingContext?.()?.getPath(),
+        row
+      ])
+    );
+
+    for (const [key, contact] of Object.entries(model.oData || {})) {
+      if (
+        !key.startsWith("C_LegalTransactionExtContact(") ||
+        !contact
+      ) {
+        continue;
+      }
+
+      const type = clean(contact.LglCntntMExtCntctType).padStart(4, "0");
+      const requested = requestedByType[type];
+      if (!requested?.value) continue;
+
+      const path = `/${key.replace(/^\/+/, "")}`;
+      if (
+        populatedExternalContactPaths.has(path) &&
+        clean(model.getProperty(`${path}/LglCntntMExtCntctBP`)) ===
+          requested.value
+      ) {
+        continue;
+      }
+
+      const applied = model.setProperty(
+        `${path}/LglCntntMExtCntctBP`,
+        requested.value
+      );
+      if (!applied) continue;
+
+      const row = rowsByPath.get(path);
+      if (row) {
+        fireBoundValueChange(
+          row,
+          "LglCntntMExtCntctBP",
+          requested.value
+        );
+      }
+
+      populatedExternalContactPaths.add(path);
+      console.info(
+        "[CX F2403 POC] Contacto externo precargado",
+        {
+          path,
+          role: requested.label,
+          type,
+          value: requested.value
+        }
+      );
+    }
+
+  }
+
+  function getSmartTableRows(smartTable) {
+    if (!smartTable || typeof smartTable.getTable !== "function") {
+      return [];
+    }
+
+    const table = smartTable.getTable();
+    if (typeof table?.getItems === "function") return table.getItems();
+    if (typeof table?.getRows === "function") return table.getRows();
+    return [];
   }
 
   function escapeODataString(value) {
@@ -692,6 +993,89 @@
     );
   }
 
+  function attachCreationObserver(model, ctx) {
+    if (
+      creationObserverAttached ||
+      typeof model?.attachBatchRequestCompleted !== "function"
+    ) {
+      return;
+    }
+
+    creationObserverAttached = true;
+
+    const onBatchCompleted = (event) => {
+      if (creationNotified || event.getParameter?.("success") === false) {
+        return;
+      }
+
+      const requests = event.getParameter?.("requests") || [];
+      const legalTransactionId = extractCreatedLegalTransactionId(
+        requests
+      );
+
+      if (!legalTransactionId) return;
+
+      creationNotified = true;
+      if (typeof model.detachBatchRequestCompleted === "function") {
+        model.detachBatchRequestCompleted(onBatchCompleted);
+      }
+
+      const sourceDisplayId = cxSourceType === "CASE"
+        ? cxCaseDisplayId
+        : cxOpportunityId;
+      const detail = {
+        legalTransactionId,
+        sourceType: cxSourceType,
+        sourceDisplayId,
+        title: clean(
+          model.getProperty?.("LegalTransactionTitle", ctx)
+        ) || undefined
+      };
+
+      console.info(
+        "[CX F2403 POC] Transacción legal creada; notificando al monitor.",
+        detail
+      );
+      window.dispatchEvent(
+        new CustomEvent("gpc:legal-transaction-created", { detail })
+      );
+    };
+
+    model.attachBatchRequestCompleted(onBatchCompleted);
+  }
+
+  function extractCreatedLegalTransactionId(requests = []) {
+    for (const request of requests) {
+      if (request?.success === false) continue;
+
+      const statusCode = Number(
+        request?.response?.statusCode || request?.response?.status || 0
+      );
+      if (statusCode >= 400) continue;
+
+      const raw = [
+        request?.url,
+        request?.requestUri,
+        request?.response?.requestUri,
+        request?.response?.body
+      ].filter(Boolean).join(" ");
+      let decoded = raw;
+
+      try {
+        decoded = decodeURIComponent(raw);
+      } catch (_error) {
+        // Algunas versiones de UI5 entregan el URL parcialmente decodificado.
+      }
+
+      const match = decoded.match(
+        /GET_ACTIVE_LT[^\s]*[?&]LegalTransaction\s*=\s*'?([0-9]+)'?/i
+      );
+      if (match) return match[1];
+    }
+
+    return "";
+  }
+
   async function applyPrefill() {
     if (prefillApplied) {
       return;
@@ -706,7 +1090,7 @@
         );
       }
 
-      if (!cxDivision) {
+      if (cxSourceType !== "CASE" && !cxDivision) {
         throw new Error(
           "CX no envió la división de la Opportunity (cxDivision)."
         );
@@ -714,14 +1098,22 @@
 
       if (!cxContext) {
         throw new Error(
-          cxDivision === "10"
+          cxSourceType === "CASE"
+            ? "El tipo de caso CX no tiene un contexto S/4 válido."
+            : cxDivision === "10"
             ? "CX no envió uno de los contextos inmobiliarios válidos (20150-20153)."
             : "La división CX " + cxDivision +
               " no tiene un contexto S/4 válido para los parámetros recibidos."
         );
       }
 
-      if (!cxOpportunityId) {
+      if (cxSourceType === "CASE" && !cxCaseDisplayId) {
+        throw new Error(
+          "CX no envió el número visible del caso (cxCaseDisplayId)."
+        );
+      }
+
+      if (cxSourceType !== "CASE" && !cxOpportunityId) {
         console.warn(
           "[CX F2403 POC] CX no envió cxOpportunityId."
         );
@@ -734,6 +1126,9 @@
         model,
         ctx
       } = await waitForF2403();
+
+      attachCreationObserver(model, ctx);
+      scheduleTemplateCreationRemoval(win, view);
 
       /*
        * Título primero: basicDataValidation() consulta el título antes
@@ -787,17 +1182,16 @@
        * materialice. El retry continúa en segundo plano mientras el usuario
        * revisa los primeros pasos.
        */
-      applyEntityPrefill(view, model).catch((error) => {
-        console.warn(
-          "[CX F2403 POC] Falló el prefill asíncrono de Partes.",
-          error
-        );
-      });
+      scheduleEntityPrefill(view, model);
+      scheduleExternalContactPrefill(view, model);
       win.sap.ui.getCore().applyChanges();
 
       if (params.get("cxTitleFormat") === "v1") {
+        const sourceDisplayId = cxSourceType === "CASE"
+          ? cxCaseDisplayId
+          : cxOpportunityId;
         const title = buildContractTitle(params.get("cxCompanyInitials"), params.get("cxClientName"),
-          model.getProperty("LglCntntMContextTitle", ctx), cxOpportunityId);
+          model.getProperty("LglCntntMContextTitle", ctx), sourceDisplayId);
         model.setProperty("LegalTransactionTitle", title, ctx);
         // El título identifica la oportunidad: se mantiene íntegro durante la edición.
         for (const control of boundValueControls(view, "LegalTransactionTitle")) {
@@ -817,7 +1211,11 @@
         "[CX F2403 POC] Prefill aplicado",
         {
           cxTitle,
+          cxSourceType,
           cxOpportunityId,
+          cxCaseUuid: cxCaseUuid || null,
+          cxCaseDisplayId: cxCaseDisplayId || null,
+          cxCaseType: cxCaseType || null,
           cxDivision,
           requestedContext: requestedContext || null,
           cxSalesCycle: cxSalesCycle || null,
@@ -832,7 +1230,9 @@
             client: cxClientBp || "manual",
             salesOrganization:
               cxSalesOrganization || "manual",
-            contacts: "manual"
+            primaryContact: cxPrimaryContactBp || "manual",
+            signer: cxSignerBp || "manual",
+            legalContact: cxLegalContactBp || "manual"
           },
           cxPep,
           LegalTransactionTitle:
@@ -904,10 +1304,10 @@ function buildContractTitle(initials, client, context, id) {
   const cleanPart = value => String(value || '').trim().replace(/\s+/g, ' ');
   const parts = [initials, client, context].map(cleanPart);
   if (parts.some(part => !part) || !/^\d+$/.test(String(id))) {
-    throw new Error('Faltan siglas de sociedad, cliente, contexto o ID de oportunidad para el título.');
+    throw new Error('Faltan siglas de sociedad, cliente, contexto o ID de referencia CX para el título.');
   }
   const suffix = `. CX${id}`;
   const title = `${parts[0]}. ${parts[1]}. CONTRATO ${parts[2]}${suffix}`;
-  if (title.length > 128) throw new Error('El título supera 128 caracteres. Debe acordarse una abreviatura de sociedad, cliente o contexto; el ID de oportunidad no se recorta.');
+  if (title.length > 128) throw new Error('El título supera 128 caracteres. Debe acordarse una abreviatura de sociedad, cliente o contexto; el ID de referencia CX no se recorta.');
   return title;
 }

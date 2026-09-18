@@ -11,7 +11,7 @@ const sourcePath = path.join(
   'request-contract.js'
 );
 
-test('precarga cliente y organización con claves S/4 y deja contactos manuales', async () => {
+test('precarga cliente y organización con claves S/4', async () => {
   const source = await readFile(sourcePath, 'utf8');
 
   assert.match(source, /params\.get\("cxClientBp"\)/);
@@ -26,10 +26,53 @@ test('precarga cliente y organización con claves S/4 y deja contactos manuales'
   assert.match(source, /C_LCMSalesOrganizationVH/);
   assert.match(source, /`\$\{rowPath\}\/LglCntntMEntityName`/);
   assert.match(source, /validateEntityWhenControlIsReady/);
+  assert.match(source, /scheduleEntityPrefill/);
+  assert.match(source, /attachRequestCompleted/);
+  assert.match(source, /attachDataReceived/);
+  assert.match(source, /model-request-completed/);
+  assert.match(source, /table-data-received/);
+  assert.match(source, /El ID es el dato funcional/);
   assert.doesNotMatch(source, /key\.startsWith\("C_LCMEntityTypeValueHelp/);
-  assert.match(source, /contacts:\s*"manual"/);
-  assert.doesNotMatch(source, /cxPrimaryContactBp/);
-  assert.doesNotMatch(source, /cxSignerBp/);
+});
+
+test('precarga contactos externos en Opportunity y Case', async () => {
+  const source = await readFile(sourcePath, 'utf8');
+
+  assert.match(source, /params\.get\("cxSourceType"\)/);
+  assert.match(source, /params\.get\("cxPrimaryContactBp"\)/);
+  assert.match(source, /params\.get\("cxSignerBp"\)/);
+  assert.match(source, /params\.get\("cxLegalContactBp"\)/);
+  assert.match(source, /key\.startsWith\("C_LegalTransactionExtContact\("\)/);
+  assert.match(source, /"0001"[\s\S]*"Contacto principal"/);
+  assert.match(source, /"0002"[\s\S]*"Firmante"/);
+  assert.match(source, /"0003"[\s\S]*"Contacto legal"/);
+  assert.match(source, /LglCntntMExtCntctBP/);
+  assert.match(source, /extContactsSmartTable/);
+  assert.match(source, /attachDataReceived/);
+});
+
+test('Case usa sus contextos y deja monto, moneda, producto y PEP vacíos', async () => {
+  const source = await readFile(sourcePath, 'utf8');
+
+  assert.match(source, /Z001:\s*"20141"/);
+  assert.match(source, /Z006:\s*"20142"/);
+  assert.match(source, /cxSourceType !== "CASE" && cxAmount/);
+  assert.match(source, /cxSourceType !== "CASE" && cxCurrency/);
+  assert.match(source, /cxSourceType !== "CASE" && cxPep !== null/);
+  assert.match(source, /cxSourceType !== "CASE" && cxProduct/);
+  assert.match(source, /ZZ1_UbicacionTecnica_LTH/);
+});
+
+test('usa el producto de Opportunity como ubicación técnica', async () => {
+  const source = await readFile(sourcePath, 'utf8');
+
+  assert.match(
+    source,
+    /const cxTechnicalLocation = clean\(params\.get\("cxTechnicalLocation"\)\) \|\|[\s\S]*cxSourceType !== "CASE" \? cxProduct : ""/
+  );
+  assert.match(source, /if \(cxTechnicalLocation\) \{/);
+  assert.match(source, /"ZZ1_UbicacionTecnica_LTH"/);
+  assert.match(source, /"opportunityProduct"/);
 });
 
 test('sincroniza monto y moneda visibles con sus campos de aprobación', async () => {
@@ -56,4 +99,23 @@ test('elimina el contexto inmobiliario obsoleto y exige uno de los nuevos', asyn
   }
   assert.match(source, /division === ["']10["']/);
   assert.match(source, /realEstateContexts\.includes\(override\)/);
+});
+
+test('detecta la creación de F2403 y notifica al contenedor', async () => {
+  const source = await readFile(sourcePath, 'utf8');
+
+  assert.match(source, /attachBatchRequestCompleted/);
+  assert.match(source, /GET_ACTIVE_LT/);
+  assert.match(source, /gpc:legal-transaction-created/);
+  assert.match(source, /legalTransactionId/);
+});
+
+test('elimina la acción nativa de crear documento desde plantilla', async () => {
+  const source = await readFile(sourcePath, 'utf8');
+
+  assert.match(source, /scheduleTemplateCreationRemoval/);
+  assert.match(source, /crear a partir de plantilla/);
+  assert.match(source, /create from template/);
+  assert.match(source, /setVisible\(false\)/);
+  assert.match(source, /MutationObserver/);
 });
