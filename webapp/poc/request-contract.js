@@ -750,18 +750,15 @@
 
     /*
      * Los Contactos Externos son registros transitorios de Partes, igual que
-     * Cliente/Organización de ventas (ver applyEntityPrefill). NO CONFIRMADO
-     * contra el metadata real: se asume el mismo patrón de cache OData
-     * (C_LegalTransactionExternalContact(...)) que usa
-     * C_LegalTransactionEntity para las Entidades, hasta poder verificarlo
-     * contra F2403 en vivo. Los códigos de tipo (0001 Contacto Principal,
-     * 0002 Firmante) sí están confirmados por el código previo a la
-     * regresión del 2/sep.
+     * Cliente/Organización de ventas (ver applyEntityPrefill). Aparecen en el
+     * cache OData como C_LegalTransactionExtContact(...), confirmado contra
+     * F2403 en vivo. Los códigos de tipo (0001 Contacto Principal,
+     * 0002 Firmante) vienen del código previo a la regresión del 2/sep.
      */
     for (let attempt = 0; attempt < 40; attempt++) {
       const contactRows = Object.entries(model.oData || {}).filter(
         ([key, row]) =>
-          key.startsWith("C_LegalTransactionExternalContact(") &&
+          key.startsWith("C_LegalTransactionExtContact(") &&
           row &&
           row.LglCntntMExtCntctType
       );
