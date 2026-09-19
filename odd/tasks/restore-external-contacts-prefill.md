@@ -173,3 +173,16 @@ Implementación completada 2026-09-18 (T1-T4). Pendiente de cierre: prueba
 manual contra F2403 real (ver "Verificación" arriba) — en particular el
 nombre de la entidad transitoria de Contactos Externos y el `$filter`
 exacto, que no se pueden confirmar sin el ambiente real.
+
+## Nota 2026-09-19 — clientes organización
+- Validado en vivo: Firmante/Contacto principal se llenan para cliente individual
+  (BP = cliente). La entidad transitoria real es `C_LegalTransactionExtContact`.
+- Para organizaciones CX solo entrega `primaryContact.displayId` (1001816, ID visible
+  de CX, no clave S/4) + nombre y correo. Ya no se envía ese displayId como BP:
+  `ecm-iframe.js` manda `cxPrimaryContactName`/`cxPrimaryContactEmail` y
+  `resolveExternalContactByCompany` resuelve la persona en
+  `C_LglCntntMExtContactByBPVH` filtrando `BusinessPartnerCompany eq <cxClientBp>`
+  (primero por correo, luego por nombre normalizado sin títulos). Si no hay un único
+  candidato queda manual y se loguea la lista de candidatos.
+- Firmante = Contacto principal (misma resolución, cacheada; sin reintentos en bucle).
+- Pendiente de validar en F2403 real con una oportunidad de empresa.

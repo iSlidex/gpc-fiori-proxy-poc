@@ -57,6 +57,26 @@ test('restaura el prefill de Firmante y Contacto Principal vía hidratación por
   assert.match(source, /signer:\s*cxSignerBp \|\| "manual"/);
 });
 
+test('resuelve el contacto de organizaciones por nombre/correo dentro de la empresa cliente', async () => {
+  const source = await readFile(sourcePath, 'utf8');
+
+  assert.match(source, /params\.get\("cxPrimaryContactName"\)/);
+  assert.match(source, /params\.get\("cxPrimaryContactEmail"\)/);
+  assert.match(source, /async function resolveExternalContactByCompany\(/);
+  assert.match(
+    source,
+    /BusinessPartnerCompany eq '\$\{escapeODataString\(clientBp\)\}'/
+  );
+  assert.match(source, /function normalizeContactName\(/);
+  assert.match(source, /function contactNamesMatch\(/);
+  assert.match(source, /ambiguo por nombre\/correo/);
+  assert.match(source, /const resolutions = new Map\(\)/);
+  assert.match(
+    source,
+    /`\$\{rowPath\}\/LglCntntMExtCntctBP`,\s*resolvedBp/
+  );
+});
+
 test('sincroniza monto y moneda visibles con sus campos de aprobación', async () => {
   const source = await readFile(sourcePath, 'utf8');
 
