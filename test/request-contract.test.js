@@ -11,7 +11,7 @@ const sourcePath = path.join(
   'request-contract.js'
 );
 
-test('precarga cliente y organización con claves S/4 y deja contactos manuales', async () => {
+test('precarga cliente y organización con claves S/4', async () => {
   const source = await readFile(sourcePath, 'utf8');
 
   assert.match(source, /params\.get\("cxClientBp"\)/);
@@ -27,9 +27,54 @@ test('precarga cliente y organización con claves S/4 y deja contactos manuales'
   assert.match(source, /`\$\{rowPath\}\/LglCntntMEntityName`/);
   assert.match(source, /validateEntityWhenControlIsReady/);
   assert.doesNotMatch(source, /key\.startsWith\("C_LCMEntityTypeValueHelp/);
-  assert.match(source, /contacts:\s*"manual"/);
-  assert.doesNotMatch(source, /cxPrimaryContactBp/);
-  assert.doesNotMatch(source, /cxSignerBp/);
+  assert.doesNotMatch(source, /contacts:\s*"manual"/);
+});
+
+test('restaura el prefill de Firmante y Contacto Principal vía hidratación por value-help', async () => {
+  const source = await readFile(sourcePath, 'utf8');
+
+  assert.match(source, /params\.get\("cxSignerBp"\)/);
+  assert.match(source, /params\.get\("cxPrimaryContactBp"\)/);
+  assert.match(source, /function applyExternalContactPrefill\(/);
+  assert.match(source, /C_LglCntntMExtContactByBPVH/);
+  assert.match(
+    source,
+    /BusinessPartnerPerson eq '\$\{escapeODataString\(bp\)\}' and BusinessPartnerCompany eq/
+  );
+  assert.match(
+    source,
+    /BusinessPartnerPerson eq '\$\{escapeODataString\(bp\)\}'`;/
+  );
+  assert.match(source, /type:\s*"0001"[\s\S]*label:\s*"Contacto principal"/);
+  assert.match(source, /type:\s*"0002"[\s\S]*label:\s*"Firmante"/);
+  assert.match(source, /LglCntntMExtCntctBP/);
+  assert.match(source, /function findExternalContactNameProperty\(/);
+  assert.match(source, /applyExternalContactPrefill\(view, model\)\.catch/);
+  assert.match(
+    source,
+    /primaryContact:\s*cxPrimaryContactBp \|\| "manual"/
+  );
+  assert.match(source, /signer:\s*cxSignerBp \|\| "manual"/);
+});
+
+test('resuelve el contacto de organizaciones por nombre/correo dentro de la empresa cliente', async () => {
+  const source = await readFile(sourcePath, 'utf8');
+
+  assert.match(source, /params\.get\("cxPrimaryContactName"\)/);
+  assert.match(source, /params\.get\("cxPrimaryContactEmail"\)/);
+  assert.match(source, /async function resolveExternalContactByCompany\(/);
+  assert.match(
+    source,
+    /BusinessPartnerCompany eq '\$\{escapeODataString\(clientBp\)\}'/
+  );
+  assert.match(source, /function normalizeContactName\(/);
+  assert.match(source, /function contactNamesMatch\(/);
+  assert.match(source, /ambiguo por nombre\/correo/);
+  assert.match(source, /const resolutions = new Map\(\)/);
+  assert.match(
+    source,
+    /`\$\{rowPath\}\/LglCntntMExtCntctBP`,\s*resolvedBp/
+  );
 });
 
 test('sincroniza monto y moneda visibles con sus campos de aprobación', async () => {

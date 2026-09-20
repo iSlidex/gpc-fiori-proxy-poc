@@ -23,6 +23,10 @@
   const cxSalesOrganizationName = clean(
     params.get("cxSalesOrganizationName")
   );
+  const cxSignerBp = clean(params.get("cxSignerBp"));
+  const cxPrimaryContactBp = clean(params.get("cxPrimaryContactBp"));
+  const cxPrimaryContactName = clean(params.get("cxPrimaryContactName"));
+  const cxPrimaryContactEmail = clean(params.get("cxPrimaryContactEmail"));
   const cxPep = parseOptionalBoolean(params.get("cxPep"));
 
   /*
@@ -645,6 +649,333 @@
     });
   }
 
+  function queryExternalContactByFilter(
+    model,
+    filterExpression,
+    extraParameters = {}
+  ) {
+    return new Promise((resolve, reject) => {
+      model.read("/C_LglCntntMExtContactByBPVH", {
+        urlParameters: { $filter: filterExpression, ...extraParameters },
+        success: resolve,
+        error: reject
+      });
+    });
+  }
+
+  const contactNameTitles = new Set([
+    "dr", "dra", "sr", "sra", "srta", "lic", "licda",
+    "ing", "mr", "mrs", "ms", "miss"
+  ]);
+
+  function normalizeContactName(value) {
+    return normalize(value)
+      .replace(/[.,]/g, " ")
+      .split(/\s+/)
+      .filter((word) => word && !contactNameTitles.has(word))
+      .join(" ");
+  }
+
+  function contactNamesMatch(expected, candidateName) {
+    const candidate = normalizeContactName(candidateName);
+    if (!expected || !candidate) return false;
+    if (expected === candidate) return true;
+    return (
+      expected.length >= 3 &&
+      candidate.length >= 3 &&
+      (candidate.includes(expected) || expected.includes(candidate))
+    );
+  }
+
+  /*
+   * CX no entrega el BP S/4 del contacto de una organización (solo su
+   * displayId visible de CX, que no es una clave válida). Se resuelve la
+   * persona dentro de las relaciones de la empresa cliente comparando primero
+   * por correo y luego por nombre normalizado. Si no hay un único candidato,
+   * el campo queda manual en vez de adivinar.
+   */
+  async function resolveExternalContactByCompany(model, clientBp, hints) {
+    const filter =
+      `BusinessPartnerCompany eq '${escapeODataString(clientBp)}'`;
+    const response = await queryExternalContactByFilter(model, filter, {
+      $top: 200
+    });
+    const candidates = Array.isArray(response?.results)
+      ? response.results
+      : [];
+    const emailKey = normalize(hints.email);
+    const nameKey = normalizeContactName(hints.name);
+    const uniquePersons = (rows) =>
+      rows.filter(
+        (row, index) =>
+          rows.findIndex(
+            (other) =>
+              other.BusinessPartnerPerson === row.BusinessPartnerPerson
+          ) === index
+      );
+
+    let matches = emailKey
+      ? uniquePersons(
+          candidates.filter(
+            (row) => normalize(row.EmailAddress) === emailKey
+          )
+        )
+      : [];
+
+    if (matches.length !== 1 && nameKey) {
+      const pool = matches.length ? matches : uniquePersons(candidates);
+      const byName = pool.filter((row) =>
+        contactNamesMatch(nameKey, row.BusinessPartnerName)
+      );
+      if (byName.length) matches = byName;
+    }
+
+    if (matches.length === 1) return matches[0];
+
+    console.warn(
+      matches.length
+        ? "[CX F2403 POC] Contacto Externo ambiguo por nombre/correo dentro de la empresa cliente; se deja manual."
+        : "[CX F2403 POC] No se encontró el contacto por nombre/correo dentro de la empresa cliente; se deja manual.",
+      {
+        clientBp,
+        hints,
+        candidates: (matches.length ? matches : candidates).map((row) => ({
+          BusinessPartnerPerson: row.BusinessPartnerPerson,
+          BusinessPartnerName: row.BusinessPartnerName,
+          EmailAddress: row.EmailAddress
+        }))
+      }
+    );
+    return null;
+  }
+
+  /*
+   * A diferencia de C_LCMContactsOfCustomerVH (clave compuesta predecible),
+   * este value help es una colección que hay que filtrar. Primero intentamos
+   * BusinessPartnerPerson + BusinessPartnerCompany (relación exacta con el
+   * cliente); si no hay match, hacemos fallback a filtrar solo por
+   * BusinessPartnerPerson y tomamos el primer resultado, dejando un
+   * console.warn visible para detectar el fallback en el ambiente real.
+   */
+  async function resolveExternalContact(model, bp, clientBp) {
+    if (clientBp) {
+      const combinedFilter =
+        `BusinessPartnerPerson eq '${escapeODataString(bp)}' and BusinessPartnerCompany eq '${escapeODataString(clientBp)}'`;
+
+      try {
+        const combined = await queryExternalContactByFilter(
+          model,
+          combinedFilter
+        );
+        const combinedResults = Array.isArray(combined?.results)
+          ? combined.results
+          : [];
+        if (combinedResults.length) return combinedResults[0];
+      } catch (error) {
+        console.warn(
+          "[CX F2403 POC] Falló el filtro BusinessPartnerPerson + BusinessPartnerCompany en C_LglCntntMExtContactByBPVH; se intentará el fallback.",
+          { bp, clientBp, error }
+        );
+      }
+    }
+
+    const fallbackFilter = `BusinessPartnerPerson eq '${escapeODataString(bp)}'`;
+    const fallback = await queryExternalContactByFilter(
+      model,
+      fallbackFilter
+    );
+    const fallbackResults = Array.isArray(fallback?.results)
+      ? fallback.results
+      : [];
+
+    if (fallbackResults.length) {
+      console.warn(
+        "[CX F2403 POC] Contacto Externo resuelto por fallback: filtrando solo por BusinessPartnerPerson (sin match de BusinessPartnerCompany, o cxClientBp no disponible). Verificar en el ambiente real.",
+        { bp, clientBp: clientBp || null, filter: fallbackFilter }
+      );
+      return fallbackResults[0];
+    }
+
+    return null;
+  }
+
+  /*
+   * El nombre de la propiedad "display name" en la fila de Contacto Externo
+   * no está confirmado contra el metadata real (a diferencia de
+   * LglCntntMEntityName en Entidades). Se descubre heurísticamente, igual
+   * que findProductProperty: si no aparece, se deja solo el BP y se avisa
+   * con console.warn en vez de asumir un nombre no verificado.
+   */
+  function findExternalContactNameProperty(model, rowPath) {
+    const rowObject = model.getObject(rowPath) || {};
+    const candidate = Object.keys(rowObject).find(
+      (name) =>
+        name.startsWith("LglCntntMExtCntct") &&
+        normalize(name).includes("name")
+    );
+
+    if (!candidate) {
+      console.warn(
+        "[CX F2403 POC] No se encontró una propiedad de nombre reconocible (LglCntntMExtCntct*Name) en la fila de Contacto Externo; se deja solo el BP.",
+        { rowPath, availableProperties: Object.keys(rowObject) }
+      );
+    }
+
+    return candidate || "";
+  }
+
+  async function applyExternalContactPrefill(view, model) {
+    const lookupHints = {
+      name: cxPrimaryContactName,
+      email: cxPrimaryContactEmail
+    };
+    const canLookupByCompany = Boolean(
+      cxClientBp && (lookupHints.name || lookupHints.email)
+    );
+    let pendingContacts = [
+      {
+        type: "0001",
+        label: "Contacto principal",
+        bp: cxPrimaryContactBp
+      },
+      {
+        type: "0002",
+        label: "Firmante",
+        bp: cxSignerBp
+      }
+    ].filter((contact) => contact.bp || canLookupByCompany);
+
+    if (!pendingContacts.length) return;
+
+    /*
+     * Cada contacto se resuelve una sola vez (Promise cacheada); Firmante y
+     * Contacto principal comparten la misma búsqueda por empresa. Si la
+     * resolución falla, el contacto se descarta en vez de reintentar 40 veces.
+     */
+    const resolutions = new Map();
+    const resolvedBps = {};
+    const resolveOnce = (requested) => {
+      const key = requested.bp
+        ? `bp:${requested.bp}`
+        : `company:${cxClientBp}`;
+      if (!resolutions.has(key)) {
+        const lookup = requested.bp
+          ? resolveExternalContact(model, requested.bp, cxClientBp)
+          : resolveExternalContactByCompany(model, cxClientBp, lookupHints);
+        resolutions.set(
+          key,
+          lookup.catch((error) => {
+            console.warn(
+              "[CX F2403 POC] No fue posible consultar C_LglCntntMExtContactByBPVH.",
+              { bp: requested.bp || null, clientBp: cxClientBp, error }
+            );
+            return null;
+          })
+        );
+      }
+      return resolutions.get(key);
+    };
+
+    /*
+     * Los Contactos Externos son registros transitorios de Partes, igual que
+     * Cliente/Organización de ventas (ver applyEntityPrefill). Aparecen en el
+     * cache OData como C_LegalTransactionExtContact(...), confirmado contra
+     * F2403 en vivo. Los códigos de tipo (0001 Contacto Principal,
+     * 0002 Firmante) vienen del código previo a la regresión del 2/sep.
+     */
+    for (let attempt = 0; attempt < 40; attempt++) {
+      const contactRows = Object.entries(model.oData || {}).filter(
+        ([key, row]) =>
+          key.startsWith("C_LegalTransactionExtContact(") &&
+          row &&
+          row.LglCntntMExtCntctType
+      );
+      const nextPending = [];
+
+      for (const requested of pendingContacts) {
+        const match = contactRows.find(([, row]) => {
+          const type = clean(row.LglCntntMExtCntctType).padStart(4, "0");
+          const typeName = normalize(row.LglCntntMExtCntctTypeName);
+          return requested.type === "0001"
+            ? type === "0001" || typeName.includes("contacto principal")
+            : type === "0002" || typeName.includes("firmante");
+        });
+
+        if (!match) {
+          nextPending.push(requested);
+          continue;
+        }
+
+        const rowPath = `/${match[0].replace(/^\/+/, "")}`;
+        const contactRecord = await resolveOnce(requested);
+        const resolvedBp = clean(contactRecord?.BusinessPartnerPerson);
+
+        if (!resolvedBp) {
+          console.warn(
+            `[CX F2403 POC] ${requested.label} no se pudo resolver en C_LglCntntMExtContactByBPVH; se deja manual.`,
+            { bp: requested.bp || null, clientBp: cxClientBp || null }
+          );
+          continue;
+        }
+
+        let applied = model.setProperty(
+          `${rowPath}/LglCntntMExtCntctBP`,
+          resolvedBp
+        );
+
+        const nameProperty = findExternalContactNameProperty(
+          model,
+          rowPath
+        );
+        if (applied && nameProperty) {
+          const displayName = clean(
+            contactRecord.BusinessPartnerName ||
+              contactRecord.BusinessPartnerFullName
+          );
+          if (displayName) {
+            applied =
+              model.setProperty(`${rowPath}/${nameProperty}`, displayName) &&
+              applied;
+          }
+        }
+
+        if (!applied) {
+          nextPending.push(requested);
+          continue;
+        }
+
+        resolvedBps[requested.type] = resolvedBp;
+        validateEntityWhenControlIsReady(view, rowPath, {
+          label: requested.label,
+          property: "LglCntntMExtCntctBP",
+          value: resolvedBp
+        });
+      }
+
+      pendingContacts = nextPending;
+
+      if (!pendingContacts.length) {
+        if (Object.keys(resolvedBps).length) {
+          console.info("[CX F2403 POC] Contactos externos precargados", {
+            primaryContact: resolvedBps["0001"] || null,
+            signer: resolvedBps["0002"] || null
+          });
+        }
+        return;
+      }
+
+      await sleep(250);
+    }
+
+    console.warn(
+      "[CX F2403 POC] No se encontraron a tiempo las filas de Contactos Externos para completar el prefill.",
+      {
+        primaryContact: cxPrimaryContactBp || null,
+        signer: cxSignerBp || null
+      }
+    );
+  }
+
   async function validateEntityWhenControlIsReady(
     view,
     rowPath,
@@ -793,6 +1124,12 @@
           error
         );
       });
+      applyExternalContactPrefill(view, model).catch((error) => {
+        console.warn(
+          "[CX F2403 POC] Falló el prefill asíncrono de Contactos Externos.",
+          error
+        );
+      });
       win.sap.ui.getCore().applyChanges();
 
       if (params.get("cxTitleFormat") === "v1") {
@@ -832,7 +1169,8 @@
             client: cxClientBp || "manual",
             salesOrganization:
               cxSalesOrganization || "manual",
-            contacts: "manual"
+            primaryContact: cxPrimaryContactBp || "manual",
+            signer: cxSignerBp || "manual"
           },
           cxPep,
           LegalTransactionTitle:
