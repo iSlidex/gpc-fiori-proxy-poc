@@ -53,6 +53,8 @@
   const status = document.getElementById("status");
 
   let prefillApplied = false;
+  let creationObserverAttached = false;
+  let creationNotified = false;
   let approvalModelListenerAttached = false;
   const approvalSyncControls = new WeakSet();
   const approvalFieldPairs = Object.freeze([
@@ -1023,6 +1025,88 @@
     );
   }
 
+  // Ver odd/tasks/restore-f2403-auto-return.md (GPC-CreacionSolicitudContrato):
+  // F2403 no expone un evento propio de "guardado"; detectamos la creación
+  // real mirando las llamadas batch completadas hasta encontrar GET_ACTIVE_LT
+  // con el LegalTransaction recién creado, y se lo avisamos al padre (BFF)
+  // vía CustomEvent, que frame-unlock.js traduce en postMessage.
+  function attachCreationObserver(model, ctx) {
+    if (
+      creationObserverAttached ||
+      typeof model?.attachBatchRequestCompleted !== "function"
+    ) {
+      return;
+    }
+
+    creationObserverAttached = true;
+
+    const onBatchCompleted = (event) => {
+      if (creationNotified || event.getParameter?.("success") === false) {
+        return;
+      }
+
+      const requests = event.getParameter?.("requests") || [];
+      const legalTransactionId = extractCreatedLegalTransactionId(requests);
+
+      if (!legalTransactionId) return;
+
+      creationNotified = true;
+      if (typeof model.detachBatchRequestCompleted === "function") {
+        model.detachBatchRequestCompleted(onBatchCompleted);
+      }
+
+      const detail = {
+        legalTransactionId,
+        sourceDisplayId: cxOpportunityId,
+        title: clean(
+          model.getProperty?.("LegalTransactionTitle", ctx)
+        ) || undefined
+      };
+
+      console.info(
+        "[CX F2403 POC] Transacción legal creada; notificando al monitor.",
+        detail
+      );
+      window.dispatchEvent(
+        new CustomEvent("gpc:legal-transaction-created", { detail })
+      );
+    };
+
+    model.attachBatchRequestCompleted(onBatchCompleted);
+  }
+
+  function extractCreatedLegalTransactionId(requests = []) {
+    for (const request of requests) {
+      if (request?.success === false) continue;
+
+      const statusCode = Number(
+        request?.response?.statusCode || request?.response?.status || 0
+      );
+      if (statusCode >= 400) continue;
+
+      const raw = [
+        request?.url,
+        request?.requestUri,
+        request?.response?.requestUri,
+        request?.response?.body
+      ].filter(Boolean).join(" ");
+      let decoded = raw;
+
+      try {
+        decoded = decodeURIComponent(raw);
+      } catch (_error) {
+        // Algunas versiones de UI5 entregan el URL parcialmente decodificado.
+      }
+
+      const match = decoded.match(
+        /GET_ACTIVE_LT[^\s]*[?&]LegalTransaction\s*=\s*'?([0-9]+)'?/i
+      );
+      if (match) return match[1];
+    }
+
+    return "";
+  }
+
   async function applyPrefill() {
     if (prefillApplied) {
       return;
@@ -1065,6 +1149,8 @@
         model,
         ctx
       } = await waitForF2403();
+
+      attachCreationObserver(model, ctx);
 
       /*
        * Título primero: basicDataValidation() consulta el título antes

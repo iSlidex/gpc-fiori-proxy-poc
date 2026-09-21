@@ -93,6 +93,23 @@ test('sincroniza monto y moneda visibles con sus campos de aprobación', async (
   assert.match(source, /syncApprovalFields/);
 });
 
+test('detecta la creación de la transacción legal (GET_ACTIVE_LT) y notifica al monitor', async () => {
+  const source = await readFile(sourcePath, 'utf8');
+
+  assert.match(source, /function attachCreationObserver\(model, ctx\)/);
+  assert.match(source, /typeof model\?\.attachBatchRequestCompleted !== "function"/);
+  assert.match(source, /function extractCreatedLegalTransactionId\(requests = \[\]\)/);
+  assert.match(
+    source,
+    /GET_ACTIVE_LT\[\^\\s\]\*\[\?&\]LegalTransaction\\s\*=\\s\*'\?\(\[0-9\]\+\)'\?/
+  );
+  assert.match(
+    source,
+    /new CustomEvent\("gpc:legal-transaction-created", \{ detail \}\)/
+  );
+  assert.match(source, /attachCreationObserver\(model, ctx\);/);
+});
+
 test('elimina el contexto inmobiliario obsoleto y exige uno de los nuevos', async () => {
   const source = await readFile(sourcePath, 'utf8');
   assert.doesNotMatch(source, /["']10["']\s*:\s*["']20098["']/);
