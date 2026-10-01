@@ -6,7 +6,7 @@ const source = fs.readFileSync(require('node:path').join(__dirname, '../webapp/p
 const scope = {};
 vm.runInNewContext(source.slice(source.indexOf('function buildContractTitle(')), scope);
 const build = scope.buildContractTitle;
-test('formats the title with a terminal opportunity identifier', () => {
+test('formats the title with a terminal CX source identifier', () => {
   assert.equal(build('ABC', 'Cliente', 'Alquiler', '274'), 'ABC. Cliente. CONTRATO Alquiler. CX274');
 });
 test('rejects missing fields and unsafe IDs', () => {
