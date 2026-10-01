@@ -106,7 +106,7 @@ test('Case usa sus contextos y deja monto, moneda, producto y PEP vacíos', asyn
   assert.match(source, /cxSourceType !== "CASE" && cxAmount/);
   assert.match(source, /cxSourceType !== "CASE" && cxCurrency/);
   assert.match(source, /cxSourceType !== "CASE" && cxPep !== null/);
-  assert.match(source, /cxSourceType !== "CASE" && cxProduct/);
+  assert.match(source, /!isCaseContextSource && cxProduct/);
   assert.match(source, /ZZ1_UbicacionTecnica_LTH/);
 });
 
